@@ -17,74 +17,54 @@ family-assistant/
 ├── nanobot/        — vendored fork of nanobot (agent runtime, channels, MCP)
 ├── familia/        — наш слой: principals, policy, identity_resolver, tools
 ├── memx/           — vendored memX (memory backend, Redis-backed)
-├── admin/          — Tauri 2 + React desktop app (admin .exe sources)
 ├── bin/            — release tooling (regen-lock, build-source-pack, release-admin)
 ├── docs/           — этот документ и соседи
 ├── docker-compose.yml          — gateway + redis + ingress
 ├── docker-compose.memx.yml     — memX backend (отдельный compose-проект)
 ├── Dockerfile                  — мульти-стейдж сборка gateway-образа
-├── bootstrap.sh                — установка/апдейт на ВМ (запускается админкой)
+├── admin/src-tauri/resources/bootstrap.sh
+│                               — установка/апдейт на ВМ (запускается админкой)
 └── principals.example.json     — стартовый шаблон для нового деплоя
 ```
 
-## Building the admin .exe
+> **Заметка про `admin/`.** Sources Tauri/React админки **в этом
+> репо не публикуются** — только готовые артефакты (`.exe` +
+> `WebView2Loader.dll` в [Releases][rel]). Это сознательное
+> решение: code-signing для unsigned-бинарников хобби-проекта
+> отсутствует, и распыляться между поддержкой публичной фронтенд-
+> кодовой базы и backend'а — не в бюджете автора. Если очень
+> нужно — fork backend'а и пишите свой клиент, контракт IPC
+> описан в `nanobot/nanobot/cli/commands.py` (`familia rpc-server`)
+> и `bin/build-source-pack.sh`.
+>
+> [rel]: https://github.com/Verconto/familia/releases/latest
 
-### Prereqs
+## Что собирается из этого репо
 
-- **Rust 1.77+** (для Tauri 2).
-- **Node 20+** и **pnpm 10+**.
-- **Docker** — нужен для шага `build-source-pack` (компиляция в
-  digest-pinned ephemeral container'е).
-- Windows-машина, если нужен именно `.exe`. Cross-compile из Linux
-  возможен, но в release-скрипте не поддержан.
+То, что **внутри `gateway`-контейнера**: Python-пакеты `nanobot`,
+`familia`, `memx`. Сборка происходит на целевой ВМ через
+`docker compose build` — либо запускается админкой как часть
+update-flow (см. ниже), либо вручную из `git clone` на ВМ
+([Manual install](#manual-install-on-a-vm-no-admin-exe)).
 
-### Полный релиз
-
-```bash
-bin/release-admin.sh 0.5.61
-```
-
-Скрипт:
-
-1. Прогоняет `vitest` и Rust-тесты.
-2. Запускает `bin/build-source-pack.sh`, кладёт результат в
-   `admin/src-tauri/resources/familia-source.tar.gz`.
-3. Поднимает версию в `admin/src-tauri/tauri.conf.json` и
-   `admin/package.json`.
-4. Запускает `pnpm tauri build` — получает
-   `dist/admin/FamiliaAdmin-v0.5.61.exe` плюс `WebView2Loader.dll`.
-5. Считает SHA-256 для каждого файла, пишет в
-   `dist/admin/CHANGELOG.md` заготовку под release notes.
-
-### Ручная сборка (без релиза)
-
-```bash
-cd admin
-pnpm install
-pnpm tauri build
-```
-
-Если файл `admin/src-tauri/resources/familia-source.tar.gz`
-отсутствует, `bootstrap_source_pack()` в `lib.rs` падает на пустой
-placeholder — `.exe` соберётся, но при установке source-pack
-доставлять будет нечего. Это нормально для dev-сборок, когда вы
-указываете админке уже готовый pack из другого пути.
+`bin/build-source-pack.sh` собирает source-pack tarball
+(`nanobot/`, `familia/src/`, `memx/`, `Dockerfile`, compose-yaml'ы,
+`bootstrap.sh`) — этот pack админка `include_bytes!`-ит в свой
+`.exe` при сборке. Если ты делаешь форк и хочешь свой клиент —
+вот что ему нужно отдать на ВМ.
 
 ### CI guard: `ALLOW_STALE_BACKEND_VERSION`
 
-`release-admin.sh` отказывается выпускать релиз, если в трекаемых
-backend-каталогах (`nanobot/`, `familia/src/`, `memx/`, `Dockerfile`,
-`bootstrap.sh`) что-то менялось с прошлого тега, **но**
-`familia/pyproject.toml::version` остался прежним. Это защита от
-ситуации «выкатили admin 0.5.61 с новым backend'ом, но забыли
-поднять backend semver — теперь update-flow думает, что обновляться
-не на что».
+`bin/release-admin.sh` (запускается на стороне автора при выпуске
+.exe — в публичном репо его эффект только в виде backend-version
+bump'а) отказывается выпускать релиз, если в `nanobot/`,
+`familia/src/`, `memx/`, `Dockerfile`, `bootstrap.sh` что-то
+менялось с прошлого тега, **но** `familia/pyproject.toml::version`
+остался прежним. Это защита от ситуации «выкатили админку с новым
+backend'ом, но забыли поднять backend semver — теперь update-flow
+думает, что обновляться не на что».
 
-Bypass для admin-only релиза, где backend намеренно не трогали:
-
-```bash
-ALLOW_STALE_BACKEND_VERSION=1 bin/release-admin.sh 0.5.61
-```
+Bypass: `ALLOW_STALE_BACKEND_VERSION=1 bin/release-admin.sh ...`.
 
 ## Manual install on a VM (no admin .exe)
 
@@ -203,9 +183,11 @@ mtime):
 - `Dockerfile`, `docker-compose.yml`, `docker-compose.memx.yml`,
   `principals.example.json`, скрипты из `bin/`.
 
-Результат — `admin/src-tauri/resources/familia-source.tar.gz`
-(~3.6 МБ). Tauri через `include_bytes!` в `src-tauri/src/lib.rs`
-вшивает его в финальный `.exe` на этапе `cargo build`.
+Результат — tarball ~3.6 МБ, который кладётся в ресурсы Tauri-
+проекта (вне этого публичного репо). Tauri через `include_bytes!`
+вшивает его в финальный `.exe` на этапе `cargo build`. Если вы
+форкаете и пишете свой клиент — встраивайте pack так же, либо
+скачивайте отдельным файлом при инсталле и указывайте путь.
 
 ### Runtime extraction
 
