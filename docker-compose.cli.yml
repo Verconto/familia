@@ -1,0 +1,48 @@
+# familia-cli — ad-hoc контейнер для разовых команд: onboard, status,
+# audit_view, ручной pytest/pip-audit. Не запускается в составе основного
+# стека (тот живёт в docker-compose.yml). Образ и маунты совпадают с
+# familia-gateway, поэтому cli видит те же ~/.nanobot и те же env.
+#
+# Примеры:
+#   docker compose -f docker-compose.cli.yml run --rm cli onboard
+#   docker compose -f docker-compose.cli.yml run --rm cli status
+#   docker compose -f docker-compose.cli.yml run --rm cli python -m familia.cli.audit_view --actor owner
+#
+# Если основной стек уже поднят и образ familia собран, cli переиспользует
+# его. Иначе — `docker compose -f docker-compose.cli.yml build cli`.
+
+services:
+  cli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: familia-assistant:latest
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      FAMILIA_PRINCIPALS_FILE: /home/nanobot/.nanobot/principals.json
+      FAMILIA_POLICY_FILE: /home/nanobot/.nanobot/policy.yaml
+      FAMILIA_AUDIT_FILE: /home/nanobot/.nanobot/audit.jsonl
+      MEMX_BASE_URL: ${MEMX_BASE_URL:-http://memx-backend:8000}
+      FAMILIA_OWNER_ACTOR: ${FAMILIA_OWNER_ACTOR:-owner}
+    volumes:
+      - ~/.nanobot:/home/nanobot/.nanobot
+      - familia-devtools:/home/nanobot/.local
+    cap_drop:
+      - ALL
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor=unconfined
+      - seccomp=unconfined
+    stdin_open: true
+    tty: true
+    command: ["status"]
+
+volumes:
+  # Shared with main stack — project name defaults to the directory name,
+  # which is the same for both compose files, so the volume namespace is
+  # shared. pip-installed devtools persist across cli invocations and
+  # survive main-stack rebuilds.
+  familia-devtools:

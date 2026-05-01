@@ -1,0 +1,26 @@
+# Override that grants the outer-container privileges needed by bubblewrap
+# (the inner sandbox the exec tool relies on). Merge into the main stack ONLY
+# when the LLM has the exec tool enabled:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.exec-sandbox.yml up -d
+#
+# Without merging this file, ExecTool will refuse at startup when sandbox is
+# empty (see nanobot.agent.loop._register_default_tools). With sandbox=bwrap
+# (the default), exec tool calls would still fail at runtime because bwrap
+# can't create namespaces without these caps. The base compose stays minimal
+# — defense in depth: deployments without exec don't carry the extra
+# privileges.
+#
+# What these grant: bubblewrap calls clone(CLONE_NEWNS|CLONE_NEWPID|...) +
+# mount() to assemble the inner sandbox. Stock Docker seccomp blocks several
+# of those syscalls; AppArmor/SELinux profiles block mount() in many distros.
+# The privileges live on the OUTER container; bwrap uses them to BUILD a
+# more restrictive inner one for tool execution.
+
+services:
+  familia-gateway:
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor=unconfined
+      - seccomp=unconfined

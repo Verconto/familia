@@ -1,0 +1,51 @@
+diff --git a/nanobot/nanobot/channels/base.py b/nanobot/nanobot/channels/base.py
+index a59b31e..c7724a9 100644
+--- a/nanobot/nanobot/channels/base.py
++++ b/nanobot/nanobot/channels/base.py
+@@ -8,6 +8,7 @@ from typing import Any
+ 
+ from loguru import logger
+ 
++from familia.principals import resolve_actor
+ from nanobot.bus.events import InboundMessage, OutboundMessage
+ from nanobot.bus.queue import MessageBus
+ 
+@@ -25,6 +26,7 @@ class BaseChannel(ABC):
+     transcription_provider: str = "groq"
+     transcription_api_key: str = ""
+     transcription_api_base: str = ""
++    transcription_folder_id: str = ""  # yandex-only; ignored by openai/groq
+ 
+     def __init__(self, config: Any, bus: MessageBus):
+         """
+@@ -49,6 +51,13 @@ class BaseChannel(ABC):
+                     api_key=self.transcription_api_key,
+                     api_base=self.transcription_api_base or None,
+                 )
++            elif self.transcription_provider == "yandex":
++                from nanobot.providers.transcription import YandexTranscriptionProvider
++                provider = YandexTranscriptionProvider(
++                    api_key=self.transcription_api_key,
++                    folder_id=self.transcription_folder_id or None,
++                    api_base=self.transcription_api_base or None,
++                )
+             else:
+                 from nanobot.providers.transcription import GroqTranscriptionProvider
+                 provider = GroqTranscriptionProvider(
+@@ -171,6 +180,8 @@ class BaseChannel(ABC):
+         if self.supports_streaming:
+             meta = {**meta, "_wants_stream": True}
+ 
++        actor = resolve_actor(self.name, str(sender_id))
++
+         msg = InboundMessage(
+             channel=self.name,
+             sender_id=str(sender_id),
+@@ -179,6 +190,7 @@ class BaseChannel(ABC):
+             media=media or [],
+             metadata=meta,
+             session_key_override=session_key,
++            actor=actor,
+         )
+ 
+         await self.bus.publish_inbound(msg)

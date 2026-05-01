@@ -1,0 +1,24 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: memx-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  memx-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: memx-backend
+    ports:
+      - "8000:8000"
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+    depends_on:
+      - redis

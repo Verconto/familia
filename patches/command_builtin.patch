@@ -1,0 +1,109 @@
+diff --git a/nanobot/nanobot/command/builtin.py b/nanobot/nanobot/command/builtin.py
+index 94ee064..50f8fc1 100644
+--- a/nanobot/nanobot/command/builtin.py
++++ b/nanobot/nanobot/command/builtin.py
+@@ -7,6 +7,9 @@ import os
+ import sys
+ 
+ from nanobot import __version__
++from familia import audit
++from familia.policy import get_pending_store
++from nanobot.agent.tools.message import MessageTool
+ from nanobot.bus.events import OutboundMessage
+ from nanobot.command.router import CommandContext, CommandRouter
+ from nanobot.utils.helpers import build_status_content
+@@ -339,6 +342,88 @@ def build_help_text() -> str:
+     return "\n".join(lines)
+ 
+ 
++async def cmd_approve(ctx: CommandContext) -> OutboundMessage:
++    """Approve a pending policy-gated action by token (familia extension)."""
++    msg = ctx.msg
++    raw = ctx.args.strip() if ctx.args else ctx.raw.removeprefix("/approve").strip()
++    token = raw.split()[0] if raw else ""
++
++    def reply(text: str) -> OutboundMessage:
++        return OutboundMessage(
++            channel=msg.channel,
++            chat_id=msg.chat_id,
++            content=text,
++            metadata=dict(msg.metadata or {}),
++        )
++
++    if not token:
++        return reply("Usage: /approve <token>")
++
++    store = get_pending_store()
++    pending = store.peek(token)
++    if pending is None:
++        audit.log_event(
++            "policy_expired", token=token, attempted_by=msg.actor, verb="approve"
++        )
++        return reply(f"No pending action for token {token} (expired or unknown).")
++
++    if not pending.allows_approver(msg.actor):
++        approvers = ", ".join(pending.approvers) if pending.approvers else "no one"
++        audit.log_event(
++            "policy_approve_denied",
++            token=token,
++            attempted_by=msg.actor,
++            approvers=list(pending.approvers),
++        )
++        return reply(
++            f"You are not authorized to approve this action. "
++            f"Required approver(s): {approvers}."
++        )
++
++    # Commit: remove from store and execute through the message tool.
++    taken = store.take(token)
++    if taken is None:
++        audit.log_event(
++            "policy_expired", token=token, attempted_by=msg.actor, verb="approve"
++        )
++        return reply(f"Pending action {token} just expired.")
++
++    tool = None
++    if ctx.loop is not None:
++        tool = ctx.loop.tools.get("message") if hasattr(ctx.loop, "tools") else None
++    if not isinstance(tool, MessageTool):
++        return reply("Message tool is unavailable; cannot execute the approved action.")
++
++    try:
++        await tool.send_approved(taken.outbound)
++    except Exception as exc:
++        audit.log_event(
++            "policy_approve_failed",
++            token=token,
++            approver=msg.actor,
++            action=taken.action,
++            target_channel=taken.outbound.channel,
++            target_chat_id=taken.outbound.chat_id,
++            requester_actor=taken.requester_actor,
++            error=str(exc),
++        )
++        return reply(f"Approved action failed to send: {exc}")
++
++    audit.log_event(
++        "policy_approve",
++        token=token,
++        approver=msg.actor,
++        action=taken.action,
++        target_channel=taken.outbound.channel,
++        target_chat_id=taken.outbound.chat_id,
++        requester_actor=taken.requester_actor,
++        via="slash_command",
++    )
++    return reply(
++        f"Approved {taken.action} to {taken.outbound.channel}:{taken.outbound.chat_id}."
++    )
++
++
+ def register_builtin_commands(router: CommandRouter) -> None:
+     """Register the default set of slash commands."""
+     router.priority("/stop", cmd_stop)
+@@ -352,3 +437,5 @@ def register_builtin_commands(router: CommandRouter) -> None:
+     router.exact("/dream-restore", cmd_dream_restore)
+     router.prefix("/dream-restore ", cmd_dream_restore)
+     router.exact("/help", cmd_help)
++    router.prefix("/approve ", cmd_approve)
++    router.exact("/approve", cmd_approve)

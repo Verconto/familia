@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "familia"
+version = "0.2.3"
+description = "Family assistant package — principals, policy, roles, memX-backed memory, ask/buttons/graph tools"
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Vyacheslav Golev", email = "goleff74@gmail.com" }]
+
+# Runtime deps familia needs directly. `nanobot-ai` is provided by the
+# host container (Dockerfile editable-installs the subtree); we don't pin
+# it here to avoid a circular-resolve against the local copy.
+#
+# Upper bounds capped at the next major so a surprise breaking release
+# can't land on a Friday `pip install`. Transitive deps are frozen by
+# ``requirements.lock`` (uv pip compile) at image-build time — this
+# file is just the ergonomic editable spec for in-tree dev.
+dependencies = [
+    "httpx>=0.27,<1.0",
+    "loguru>=0.7,<1.0",
+    "pyyaml>=6,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<10",
+    "pytest-asyncio>=0.23,<2",
+]
+
+[project.scripts]
+familia-audit = "familia.cli.audit_view:main"
+familia = "familia.cli.graph_admin:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/familia"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

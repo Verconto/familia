@@ -1,0 +1,151 @@
+# familia policy — пример правил, поставляемый с пакетом.
+#
+# ВАЖНО: в деплое реальные правила лежат в `~/.nanobot/policy.yaml`
+# (путь берётся из env `FAMILIA_POLICY_FILE`, fallback — `policy.yaml`
+# в текущей директории). Этот файл — только документированный
+# шаблон: principal-id `owner` / `member_a` и placeholder-chat-id'ы
+# (1000001 — владелец, 1000002 — второй принципал) замени на свои
+# значения из `principals.json` (поле `id` и `sender_id`).
+#
+# Семантика движка:
+#   - Поля-matcher'ы: action, actor, channel, to_channel, to_chat.
+#   - Первый сматчившийся rule выигрывает.
+#   - Пустая строка в actor ("") матчит actor=None (системные вызовы без
+#     резолвнутого принципала — cron, heartbeat, dream).
+#   - Если ни одно правило не сматчилось — движок деньит по умолчанию.
+#     Любое новое действие, которое не разрешено явно, будет запрещено.
+#
+# Роли в этом примере:
+#   - owner     — владелец, полные права;
+#   - member_a  — второй принципал, по умолчанию может писать только
+#                 владельцу, остальное уходит на approval владельцу.
+
+rules:
+  # --- Владелец ---
+  - name: "owner: message.send кому угодно"
+    action: message.send
+    actor: owner
+    decision: allow
+
+  - name: "owner: ask.send кому угодно"
+    action: ask.send
+    actor: owner
+    decision: allow
+
+  # --- member_a: только с владельцем ---
+  - name: "member_a → owner: message"
+    action: message.send
+    actor: member_a
+    to_chat: "1000001"
+    decision: allow
+
+  - name: "member_a → owner: ask"
+    action: ask.send
+    actor: member_a
+    to_chat: "1000001"
+    decision: allow
+
+  - name: "member_a: всё остальное — требует подтверждения владельца"
+    action: [message.send, ask.send]
+    actor: member_a
+    decision: ask
+    approver: owner
+    reason: "Сообщения/вопросы member_a не-владельцу требуют подтверждения owner"
+
+  # --- Системные (cron, heartbeat, dream) ---
+  # Без резолвнутого actor'а разрешаем слать только владельцу.
+  - name: "system → owner"
+    action: message.send
+    actor: ""
+    to_chat: "1000001"
+    decision: allow
+
+  # --- memory.* (memX backend) ---
+  #
+  # Движок matches `to_chat` по префиксу, а тулы memory_* передают
+  # full_key в поле to_chat: "shared:X", "private:<actor>:X",
+  # "pair:<a>_<b>:X". Это даёт scope-level гейт поверх memX ACL.
+  #
+  # Двойная защита намеренная: memX ACL — последняя линия, наш
+  # движок — первая, и он пишет в audit лог.
+
+  # ⚠️ Структурные shared:-ключи — управление правами и графами.
+  # Записи через memory_set ЗАПРЕЩЕНЫ для всех chat-actor'ов (включая
+  # admin'а из чата). Графы и роли редактируются ТОЛЬКО через `familia` CLI
+  # на VM или будущую админ-панель.
+  #
+  # Почему даже admin не пишет графы из чата (SR-14):
+  #   - Атомарность: CLI делает целостные операции с rollback. memory_set
+  #     это плоский K/V — нет защиты от полу-записанного графа.
+  #   - Изоляция: prompt-injection в admin-сессию не должен мочь поменять
+  #     структуру семьи. CLI отдельный канал, контролируемый админом
+  #     осознанно.
+  #   - Audit: graph_edit события CLI отделены от обычных memory.write
+  #     для проще ревизии.
+  #
+  # Read открыт: roles.py:fetch_admin_grants нужен на каждый turn (любой
+  # actor пересчитывает свои роли); family/topics graphs читаются всеми
+  # участниками для kinship-резолва и vocabulary-builder'а.
+  - name: "reserved: structural shared keys — write только из CLI/панели"
+    action: memory.write
+    to_chat: ["shared:roles.*", "shared:family.graph*", "shared:topics.graph*"]
+    decision: deny
+    reason: "shared:roles.* / shared:family.graph / shared:topics.graph редактируются только через CLI"
+
+  # Владелец — read/write всех scope'ов (включая reserved выше — он admin).
+  - name: "owner: memory.* — всё"
+    action: [memory.read, memory.write]
+    actor: owner
+    decision: allow
+
+  # member_a — shared, собственное private, pair с владельцем.
+  - name: "member_a: memory shared"
+    action: [memory.read, memory.write]
+    actor: member_a
+    to_chat: "shared:*"
+    decision: allow
+
+  - name: "member_a: memory private:member_a"
+    action: [memory.read, memory.write]
+    actor: member_a
+    to_chat: "private:member_a:*"
+    decision: allow
+
+  - name: "member_a: memory pair с owner"
+    action: [memory.read, memory.write]
+    actor: member_a
+    to_chat: "pair:member_a_owner:*"
+    decision: allow
+
+  - name: "member_a: memory — всё остальное deny"
+    action: [memory.read, memory.write]
+    actor: member_a
+    decision: deny
+    reason: "member_a имеет доступ только к shared, private:member_a и pair:member_a_owner"
+
+  # System (cron/heartbeat/dream) — только shared на чтение и запись.
+  - name: "system: memory shared"
+    action: [memory.read, memory.write]
+    actor: ""
+    to_chat: "shared:*"
+    decision: allow
+
+  # --- Admin роль: управление динамическим admin-грантом + глобальной TZ ---
+  #
+  # role.admin.grant/revoke/list/set_tz доступны только эффективным
+  # админам (статическая роль из principals.json ∪ активные гранты в
+  # memX). Non-admin ловит default-deny и не может ни выдать роль, ни
+  # сменить глобальный часовой пояс.
+  - name: "admin: role.admin.* — эффективным админам"
+    action: [role.admin.grant, role.admin.revoke, role.admin.list, role.admin.set_tz]
+    actor: "@admin"
+    decision: allow
+
+  # Dream consolidator — привилегированная роль для per-scope Dream.
+  # Может писать в любой scope: summary из приватного диалога
+  # member_a пойдёт в private:member_a:*, а не в shared MEMORY.md.
+  # Читать ничего не нужно (Dream получает историю напрямую из history.jsonl).
+  - name: "dream_consolidator: memory.write любой scope"
+    action: memory.write
+    actor: dream_consolidator
+    decision: allow

@@ -1,0 +1,157 @@
+# familia policy — peer-edge driven memory ACL.
+#
+# Семантика движка та же, что и раньше: первый сматчившийся rule
+# выигрывает; пустой actor ("") = system-вызовы; default-deny если
+# никто не сматчился.
+#
+# Ключевое изменение: видимость памяти/напоминаний между принципалами
+# управляется не статическими per-actor правилами, а family-графом
+# через actor-matcher ``@peer_of:<id>``. Если у actor есть в графе
+# ``shared:family.graph`` ребро к <id> с rel ∈ {spouse_of, guardian_of}
+# и ни одна сторона не имеет ``role: child`` — actor видит частное и
+# pair-данные target'а. Удалили ребро через CLI/UI → доступ обнуляется
+# на следующий ход.
+#
+# parent_of/caregiver_of сюда не входят намеренно: добавление ребёнка
+# в principals.json не должно автоматически выдавать ему доступ к
+# private/pair-памяти родителей.
+
+rules:
+  # === Сообщения ============================================================
+  - name: "owner: message.send куда угодно"
+    action: message.send
+    actor: <owner_id>
+    decision: allow
+
+  - name: "owner: ask.send куда угодно"
+    action: ask.send
+    actor: <owner_id>
+    decision: allow
+
+  # Ответы бота в чат отправителя проходят через self-reply bypass в
+  # familia.policy.gate (target chat == inbound chat → allow без
+  # консультации с policy). Поэтому отдельного правила «принципал
+  # пишет боту» здесь не надо: он по факту разговаривает в своём
+  # чате, бот отвечает туда же, всё «бесплатно».
+  #
+  # Peer (любой @peer_of:<owner_id>) — полные коммуникативные права:
+  # бот, действуя от его имени, может слать сообщения и ask куда
+  # угодно. Не-peer принципалы не могут инициировать исходящие — ни
+  # к владельцу, ни к третьим сторонам — пока не приобретут связь.
+  - name: "peer-of-<owner_id>: message и ask куда угодно"
+    action: [message.send, ask.send]
+    actor: "@peer_of:<owner_id>"
+    decision: allow
+
+  - name: "system → owner"
+    action: message.send
+    actor: ""
+    to_chat: "<owner_chat_id>"
+    decision: allow
+
+  # === memory.* — структурные ключи (deny FIRST) ============================
+  #
+  # Зарезервированные shared-ключи редактирует только CLI/админ-панель.
+  # Это правило ОБЯЗАНО идти выше peer-allow ниже, иначе peer сможет
+  # дописать себя в shared:roles.admin_grants и обойти @admin-проверку.
+  - name: "reserved: structural shared keys — write только из CLI/панели"
+    action: memory.write
+    to_chat: ["shared:roles.*", "shared:family.graph*", "shared:topics.graph*"]
+    decision: deny
+    reason: "shared:roles.* / shared:family.graph / shared:topics.graph редактируются только через CLI"
+
+  # === memory.* — owner ====================================================
+  - name: "owner: memory.* — всё"
+    action: [memory.read, memory.write]
+    actor: <owner_id>
+    decision: allow
+
+  # === memory.* — peers ====================================================
+  #
+  # «Любая family-связь типа spouse_of/guardian_of ⇒ полный взаимный
+  # доступ к памяти/напоминаниям/инфе». Реализовано через
+  # @peer_of:<id> matcher: actor видит private/pair того принципала,
+  # с которым у него peer-edge в shared:family.graph.
+  #
+  # Пара зеркальных правил per-target: peer-of-X получает доступ к
+  # X-овым private/pair. Для текущих 2-х людей этого достаточно;
+  # каждый будущий peer-принципал просит ещё одного зеркального правила
+  # (или нового matcher'а — оставлено на потом).
+  - name: "peer-of-<owner_id>: memory shared"
+    action: [memory.read, memory.write]
+    actor: "@peer_of:<owner_id>"
+    to_chat: "shared:*"
+    decision: allow
+
+  - name: "peer-of-<owner_id>: memory private:<owner_id> и pair с ним"
+    # NB: движок поддерживает только trailing-* как wildcard, glob в
+    # середине pattern'а не работает. Поэтому pair-ключи перечислены
+    # явно — добавление нового peer-принципала Z требует строки
+    # "pair:<owner_id>_Z:*" (или "pair:Z_<owner_id>:*", в зависимости
+    # от лексикографической нормализации).
+    action: [memory.read, memory.write]
+    actor: "@peer_of:<owner_id>"
+    to_chat:
+      - "private:<owner_id>:*"
+      - "pair:<owner_id>_<peer_id>:*"
+    decision: allow
+
+  # Любой одобренный принципал — read/write только в своём
+  # private:<self>:* (engine подставляет actor в @actor placeholder).
+  # Это даёт новичку без рёбер видеть и создавать только свои данные;
+  # топиками его сообщения не тегируются (за это отвечает уже не
+  # policy, а топик-graph runtime — нет ребра к топику → не тег).
+  - name: "principal: свой private"
+    action: [memory.read, memory.write]
+    actor: "@principal"
+    to_chat: "private:@actor:*"
+    decision: allow
+
+  # Любой одобренный принципал — чтение shared (доступно всем по
+  # определению).
+  - name: "principal: чтение shared"
+    action: memory.read
+    actor: "@principal"
+    to_chat: "shared:*"
+    decision: allow
+
+  # Запись в shared разрешена; reserved-keys deny идёт ВЫШЕ и блокирует
+  # structural-ключи (shared:roles.*, shared:family.graph*, shared:topics.graph*).
+  # Tag-ACL — следующий слой: даже после allow здесь, _check_write_acl
+  # запретит писать запись с тегом, к которому у actor нет
+  # concerns-edge в shared:topics.graph (см. familia.tools.memory).
+  - name: "principal: запись shared (tag-ACL — следующий слой)"
+    action: memory.write
+    actor: "@principal"
+    to_chat: "shared:*"
+    decision: allow
+
+  - name: "peer-of-<peer_id>: memory private:<peer_id> и pair с ним"
+    # Симметрия для будущих peer'ов <peer_id>. <owner_id> и сейчас покрыт
+    # owner-allow выше; правило не лишнее — оно зеркальное и future-proof.
+    action: [memory.read, memory.write]
+    actor: "@peer_of:<peer_id>"
+    to_chat:
+      - "private:<peer_id>:*"
+      - "pair:<owner_id>_<peer_id>:*"
+      - "shared:*"
+    decision: allow
+
+  # === memory.* — system ===================================================
+  - name: "system: memory shared"
+    action: [memory.read, memory.write]
+    actor: ""
+    to_chat: "shared:*"
+    decision: allow
+
+  # === Admin-роль ==========================================================
+  - name: "admin: role.admin.* — эффективным админам"
+    action: [role.admin.grant, role.admin.revoke, role.admin.list, role.admin.set_tz]
+    actor: "@admin"
+    decision: allow
+
+  # === Dream consolidator ==================================================
+  - name: "dream_consolidator: memory.write любой scope"
+    action: memory.write
+    actor: dream_consolidator
+    decision: allow

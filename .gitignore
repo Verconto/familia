@@ -1,0 +1,62 @@
+# Local working notes (planning docs, drafts, scratch)
+notes/
+*.local.*
+.tmp-*
+_tmp_*
+audit_*.txt
+audit_*.jsonl
+
+# Personal-data blocklist for pre-commit hook (per-dev, never tracked).
+.githooks/blocklist
+
+# Admin desktop app — Tauri/React sources stay local. Only the built
+# artefacts in dist/admin/ are tracked (so users can clone-and-run).
+admin/
+!dist/admin/
+
+# Backup tarballs end up in dist/admin/ when developers pull a backup
+# from a real VM. They contain OAuth tokens, principal identities and
+# memX state — never commit.
+dist/admin/familia-backup-*
+
+# Built admin .exe + WebView2Loader.dll go to GitHub Releases, not in repo.
+dist/admin/*.exe
+dist/admin/*.exe.sha256
+dist/admin/WebView2Loader.dll
+dist/admin/WebView2Loader.dll.sha256
+
+# release-admin.sh appends to dist/admin/CHANGELOG.md as a side-effect;
+# the canonical changelog lives in notes/admin-changelog-internal.md and
+# is not published.
+dist/admin/CHANGELOG.md
+
+# Nanobot runtime workspace inside the familia source tree (test-run
+# artifact: HEARTBEAT/AGENTS/USER/SOUL/TOOLS, cron jobs, history,
+# .git store). Re-created on every gateway boot.
+familia/workspace/
+
+# Secrets & runtime state
+.env
+.env.*
+!.env.example
+audit.jsonl
+
+# User-specific runtime config (only the example is tracked)
+principals.json
+!principals.example.json
+memx-config/acl.json
+!memx-config/acl.example.json
+
+# Upstream source snapshots (not part of this repo)
+vendor/
+
+# Python build artifacts
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+
+# Editor / IDE
+.idea/
+.vscode/

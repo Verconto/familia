@@ -1,0 +1,70 @@
+diff --git a/nanobot/nanobot/cli/commands.py b/nanobot/nanobot/cli/commands.py
+index ec572ff..299eccd 100644
+--- a/nanobot/nanobot/cli/commands.py
++++ b/nanobot/nanobot/cli/commands.py
+@@ -730,12 +730,18 @@ def _run_gateway(
+         async def _silent(*_args, **_kwargs):
+             pass
+ 
++        from familia.principals import resolve_actor
++        actor = None
++        if job.payload.channel and job.payload.to:
++            actor = resolve_actor(job.payload.channel, job.payload.to)
++
+         try:
+             resp = await agent.process_direct(
+                 reminder_note,
+                 session_key=f"cron:{job.id}",
+                 channel=job.payload.channel or "cli",
+                 chat_id=job.payload.to or "direct",
++                actor=actor,
+                 on_progress=_silent,
+             )
+         finally:
+@@ -767,6 +773,9 @@ def _run_gateway(
+     # can serve the embedded webui's REST surface).
+     channels = ChannelManager(config, bus, session_manager=session_manager)
+ 
++    from familia.bus.callback_dispatcher import CallbackDispatcher
++    callback_dispatcher = CallbackDispatcher(bus)
++
+     def _pick_heartbeat_target() -> tuple[str, str]:
+         """Pick a routable channel/chat target for heartbeat-triggered messages."""
+         enabled = set(channels.enabled_channels)
+@@ -791,11 +800,20 @@ def _run_gateway(
+         async def _silent(*_args, **_kwargs):
+             pass
+ 
++        # Pin the principal derived from the delivery target so scoped
++        # tools (memX shared/pair, role gates) resolve under a real
++        # actor. Without this, ``get_current_actor()`` returns None in
++        # heartbeat turns and memory_get fails with "no actor in
++        # context". Same pattern as cron delivery.
++        from familia.principals import resolve_actor
++        actor = resolve_actor(channel, chat_id) if channel and chat_id else None
++
+         resp = await agent.process_direct(
+             tasks,
+             session_key="heartbeat",
+             channel=channel,
+             chat_id=chat_id,
++            actor=actor,
+             on_progress=_silent,
+         )
+ 
+@@ -925,6 +943,7 @@ def _run_gateway(
+         try:
+             await cron.start()
+             await heartbeat.start()
++            await callback_dispatcher.start()
+             tasks = [
+                 agent.run(),
+                 channels.start_all(),
+@@ -945,6 +964,7 @@ def _run_gateway(
+             heartbeat.stop()
+             cron.stop()
+             agent.stop()
++            await callback_dispatcher.stop()
+             await channels.stop_all()
+ 
+     asyncio.run(run())

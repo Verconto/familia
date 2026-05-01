@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Pre-commit guard against committing personal data.
+#
+# Reads patterns (one per line, case-insensitive substrings) from
+# ${FAMILIA_BLOCKLIST:-.githooks/blocklist}. Each non-empty, non-#-prefixed
+# line is one literal substring to refuse. The blocklist file is .gitignored
+# — every dev maintains their own. If the file is missing, the hook prints
+# a one-line warning and lets the commit through (so a fresh clone isn't
+# blocked, but the warning is loud enough to catch).
+#
+# Scope: only the *added* lines in the staged diff (`git diff --cached -U0`
+# filtered to lines starting with '+', minus '+++' headers). This avoids
+# false positives from context lines, deletions, or file-rename headers.
+#
+# Bypass: --no-verify (use sparingly; preferable is to scrub the data).
+#
+# Enable once per clone:
+#   git config core.hooksPath .githooks
+
+set -euo pipefail
+
+BLOCKLIST="${FAMILIA_BLOCKLIST:-.githooks/blocklist}"
+
+if [[ ! -f "$BLOCKLIST" ]]; then
+    echo "pre-commit: warning — $BLOCKLIST missing; personal-data scan SKIPPED" >&2
+    echo "pre-commit:           copy .githooks/blocklist.example to $BLOCKLIST and edit" >&2
+    exit 0
+fi
+
+# Matching is delegated to Python (.githooks/_scan.py) because GNU grep 3.0
+# in Git Bash on Windows aborts on ``grep -iF`` with Cyrillic patterns
+# (locale/UTF-8 bug in that grep build). Python's casefold + substring
+# search is correct and portable.
+hook_dir="$(dirname -- "$0")"
+git diff --cached -U0 --no-color \
+    | python3 "$hook_dir/_scan.py" "$BLOCKLIST"

@@ -1,0 +1,172 @@
+diff --git a/nanobot/nanobot/agent/memory.py b/nanobot/nanobot/agent/memory.py
+index 60bc9ac..99d7af4 100644
+--- a/nanobot/nanobot/agent/memory.py
++++ b/nanobot/nanobot/agent/memory.py
+@@ -221,9 +221,14 @@ class MemoryStore:
+ 
+     # -- history.jsonl — append-only, JSONL format ---------------------------
+ 
+-    def append_history(self, entry: str) -> int:
++    def append_history(self, entry: str, actor: str | None = None) -> int:
+         """Append *entry* to history.jsonl and return its auto-incrementing cursor.
+ 
++        ``actor`` — optional principal id whose conversation the entry
++        summarizes (familia per-scope Dream relies on this for private-memory
++        routing).  ``None`` means «system / unknown / mixed» and the entry
++        gets treated as not private to any single actor.
++
+         Entries are passed through `strip_think` to drop template-level leaks
+         (e.g. unclosed `<think` prefixes, `<channel|>` markers) before being
+         persisted. If the cleaned content is empty but the raw entry wasn't,
+@@ -241,7 +246,9 @@ class MemoryStore:
+                 "persisting empty content to avoid re-polluting context",
+                 cursor,
+             )
+-        record = {"cursor": cursor, "timestamp": ts, "content": content}
++        record: dict[str, Any] = {"cursor": cursor, "timestamp": ts, "content": content}
++        if actor:
++            record["actor"] = actor
+         with open(self.history_file, "a", encoding="utf-8") as f:
+             f.write(json.dumps(record, ensure_ascii=False) + "\n")
+         self._cursor_file.write_text(str(cursor), encoding="utf-8")
+@@ -368,19 +375,25 @@ class MemoryStore:
+             if not message.get("content"):
+                 continue
+             tools = f" [tools: {', '.join(message['tools_used'])}]" if message.get("tools_used") else ""
++            actor = message.get("actor")
++            role_tag = f"{message['role'].upper()}"
++            if actor and message.get("role") == "user":
++                role_tag = f"{role_tag}@{actor}"
+             lines.append(
+-                f"[{message.get('timestamp', '?')[:16]}] {message['role'].upper()}{tools}: {message['content']}"
++                f"[{message.get('timestamp', '?')[:16]}] {role_tag}{tools}: {message['content']}"
+             )
+         return "\n".join(lines)
+ 
+-    def raw_archive(self, messages: list[dict]) -> None:
++    def raw_archive(self, messages: list[dict], actor: str | None = None) -> None:
+         """Fallback: dump raw messages to history.jsonl without LLM summarization."""
+         self.append_history(
+             f"[RAW] {len(messages)} messages\n"
+-            f"{self._format_messages(messages)}"
++            f"{self._format_messages(messages)}",
++            actor=actor,
+         )
+         logger.warning(
+-            "Memory consolidation degraded: raw-archived {} messages", len(messages)
++            "Memory consolidation degraded: raw-archived {} messages (actor={})",
++            len(messages), actor or "-",
+         )
+ 
+ 
+@@ -486,13 +499,53 @@ class Consolidator:
+             self._get_tool_definitions(),
+         )
+ 
++    @staticmethod
++    def _group_by_actor(messages: list[dict]) -> list[tuple[str | None, list[dict]]]:
++        """Split a chunk into contiguous runs by the last-seen user actor.
++
++        A user message's ``actor`` field defines the «current principal» for
++        the assistant/tool turns that follow until the next user message.
++        Messages before any actor-tagged user (usually historical pre-tag
++        entries) get ``actor=None``.  Returns ``[(actor, messages), …]`` in
++        the original order, so timestamps and causal chains are preserved
++        within each group.
++        """
++        groups: list[tuple[str | None, list[dict]]] = []
++        current_actor: str | None = None
++        buf: list[dict] = []
++        for m in messages:
++            if m.get("role") == "user" and m.get("actor"):
++                if buf and current_actor != m["actor"]:
++                    groups.append((current_actor, buf))
++                    buf = []
++                current_actor = m["actor"]
++            buf.append(m)
++        if buf:
++            groups.append((current_actor, buf))
++        return groups
++
+     async def archive(self, messages: list[dict]) -> str | None:
+         """Summarize messages via LLM and append to history.jsonl.
+ 
+-        Returns the summary text on success, None if nothing to archive.
++        Splits the chunk by user-actor runs (see ``_group_by_actor``) so each
++        resulting history entry carries a single principal in its ``actor``
++        field — the per-scope Dream relies on this to route private facts
++        without cross-leak.  Returns the last summary produced (matching the
++        legacy single-return behavior callers use for ``_last_summary``), or
++        None if nothing was archived.
+         """
+         if not messages:
+             return None
++        last_summary: str | None = None
++        for actor, chunk in self._group_by_actor(messages):
++            if not chunk:
++                continue
++            summary = await self._archive_one(chunk, actor)
++            if summary:
++                last_summary = summary
++        return last_summary
++
++    async def _archive_one(self, messages: list[dict], actor: str | None) -> str | None:
+         try:
+             formatted = MemoryStore._format_messages(messages)
+             response = await self.provider.chat_with_retry(
+@@ -513,11 +566,14 @@ class Consolidator:
+             if response.finish_reason == "error":
+                 raise RuntimeError(f"LLM returned error: {response.content}")
+             summary = response.content or "[no summary]"
+-            self.store.append_history(summary)
++            self.store.append_history(summary, actor=actor)
+             return summary
+         except Exception:
+-            logger.warning("Consolidation LLM call failed, raw-dumping to history")
+-            self.store.raw_archive(messages)
++            logger.warning(
++                "Consolidation LLM call failed, raw-dumping to history (actor={})",
++                actor or "-",
++            )
++            self.store.raw_archive(messages, actor=actor)
+             return None
+ 
+     async def maybe_consolidate_by_tokens(
+@@ -676,6 +732,7 @@ class Dream:
+         """Build a minimal tool registry for the Dream agent."""
+         from nanobot.agent.skills import BUILTIN_SKILLS_DIR
+         from nanobot.agent.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
++        from familia.tools.dream_memory import DreamMemorySetTool
+ 
+         tools = ToolRegistry()
+         workspace = self.store.workspace
+@@ -692,6 +749,8 @@ class Dream:
+         skills_dir = workspace / "skills"
+         skills_dir.mkdir(parents=True, exist_ok=True)
+         tools.register(WriteFileTool(workspace=workspace, allowed_dir=skills_dir))
++        # familia per-scope Dream — write private facts to memX instead of MEMORY.md.
++        tools.register(DreamMemorySetTool())
+         return tools
+ 
+     # -- skill listing --------------------------------------------------------
+@@ -785,10 +844,16 @@ class Dream:
+             len(entries), last_cursor, batch[-1]["cursor"], len(batch),
+         )
+ 
+-        # Build history text for LLM
+-        history_text = "\n".join(
+-            f"[{e['timestamp']}] {e['content']}" for e in batch
+-        )
++        # Build history text for LLM — include per-entry actor so Phase 1 can
++        # attribute facts to a principal (and Phase 2 can route private facts
++        # to memX instead of the shared MEMORY.md).  Entries from before the
++        # actor-tagging change have no ``actor`` field — render them as
++        # "(untagged)" so the LLM sees the ambiguity.
++        def _render(e: dict) -> str:
++            actor = e.get("actor") or "(untagged)"
++            return f"[{e['timestamp']}] actor={actor}: {e['content']}"
++
++        history_text = "\n".join(_render(e) for e in batch)
+ 
+         # Current file contents + per-line age annotations (MEMORY.md only)
+         current_date = datetime.now().strftime("%Y-%m-%d")

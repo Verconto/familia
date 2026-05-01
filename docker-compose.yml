@@ -1,0 +1,69 @@
+# Assistant stack (familia + nanobot). memX вынесен в docker-compose.memx.yml,
+# CLI — в docker-compose.cli.yml. Стеки независимы, связь по URL:
+#   familia-gateway ──http──> ${MEMX_BASE_URL}
+# По умолчанию MEMX_BASE_URL указывает на memX, опубликованный на docker
+# bridge gateway (172.17.0.1:8100) — same-host setup. Для remote-memX
+# переопредели в .env.
+#
+# Image source: ghcr.io/<owner>/familia-assistant:${FAMILIA_TAG:-0.4.0}.
+# To use a locally-built image instead, override with
+# `docker compose -f docker-compose.yml -f docker-compose.local.yml up -d`
+# (the .local file restores the `build:` directive against the source tree).
+
+services:
+  familia-gateway:
+    container_name: familia-gateway
+    image: ghcr.io/<owner>/familia-assistant:${FAMILIA_TAG:-0.4.0}
+    command: ["gateway"]
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Familia runtime looks up principals/policy/audit via these envs;
+      # without them it would fall back to CWD (/app) and miss the configs
+      # mounted from ~/.nanobot below.
+      FAMILIA_PRINCIPALS_FILE: /home/nanobot/.nanobot/principals.json
+      FAMILIA_POLICY_FILE: /home/nanobot/.nanobot/policy.yaml
+      FAMILIA_AUDIT_FILE: /home/nanobot/.nanobot/audit.jsonl
+      # Single global timezone. Storage stays UTC; this only controls
+      # presentation and parsing of user-provided times (reminders,
+      # schedules). Runtime override lives in FAMILIA_TZ_STATE_FILE,
+      # written by the admin_set_tz tool; when that file is absent,
+      # FAMILIA_TZ is the default.
+      FAMILIA_TZ: ${FAMILIA_TZ:-UTC}
+      FAMILIA_TZ_STATE_FILE: /home/nanobot/.nanobot/tz
+      # memX endpoint. Default — same-host на docker bridge gateway
+      # (см. docker-compose.memx.yml, который биндит на 172.17.0.1:8100).
+      MEMX_BASE_URL: ${MEMX_BASE_URL:-http://172.17.0.1:8100}
+      # Principal id of the owner (routing target for system/cron messages).
+      # Default matches principals.example.json.
+      FAMILIA_OWNER_ACTOR: ${FAMILIA_OWNER_ACTOR:-owner}
+      # Optional: route VK media fetches through a socks5/http proxy.
+      VK_MEDIA_PROXY: ${VK_MEDIA_PROXY:-}
+    volumes:
+      - ~/.nanobot:/home/nanobot/.nanobot
+      # Persistent scratch for ad-hoc tools (pip-audit, pytest) installed
+      # via `docker exec -u 0 … pip install --user`. HOME stays
+      # /home/nanobot even under -u 0, so --user lands here. Keeps prod
+      # image lean while surviving image rebuilds.
+      - familia-devtools:/home/nanobot/.local
+    ports:
+      - 127.0.0.1:18790:18790
+    # Safe-by-default: drop ALL caps and keep stock seccomp/apparmor. This is
+    # enough for gateway-only deploys (no exec tool, or exec disabled). When
+    # ExecTool is enabled (default), bubblewrap needs extra outer-container
+    # privileges to build its inner sandbox — those are added by merging
+    # docker-compose.exec-sandbox.yml on top of this file:
+    #   docker compose -f docker-compose.yml -f docker-compose.exec-sandbox.yml up -d
+    # nanobot/agent/loop.py refuses to register ExecTool when sandbox config
+    # is empty, so a misconfigured deploy fails loudly at startup instead of
+    # silently exposing an unsandboxed shell to the LLM.
+    cap_drop:
+      - ALL
+    mem_limit: 1g
+    mem_reservation: 256m
+    cpus: 1.0
+
+volumes:
+  familia-devtools:

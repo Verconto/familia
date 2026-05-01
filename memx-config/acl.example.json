@@ -1,0 +1,30 @@
+{
+  "_comment": "Per-actor memX API keys. Copy to acl.json and replace placeholder keys with real secrets. Scope syntax: fnmatch glob, matches BOTH read and write (memX local ACL does not split permissions).",
+
+  "owner_key": [
+    "shared:*",
+    "private:owner:*",
+    "pair:owner_*:*"
+  ],
+  "partner_key": [
+    "shared:*",
+    "private:partner:*",
+    "pair:owner_partner:*",
+    "pair:partner_*:*"
+  ],
+  "child_key": [
+    "shared:*",
+    "private:child:*",
+    "pair:*_child:*"
+  ],
+
+  "_agent_comment": "agent_self_key — agent's own scratchpad (shared memory only). dream_consolidator_key — cross-scope read/write for nightly consolidation, registered only on dream-agent.",
+  "agent_self_key": [
+    "shared:*"
+  ],
+  "dream_consolidator_key": [
+    "shared:*",
+    "private:*:*",
+    "pair:*:*"
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "_comment": [
+    "Copy to ~/.nanobot/principals.json and fill in for your family.",
+    "Path is overridable via FAMILIA_PRINCIPALS_FILE.",
+    "`id` is used in policy.yaml as the actor value.",
+    "`identities.sender_id` is the unique id in each channel (Telegram: numeric id; VK: numeric user id).",
+    "`memx_key` MUST be unique per principal. Generate with `openssl rand -hex 32`. The same key must be added to memx-config/acl.json with the appropriate scope grants. Two principals sharing a memx_key will refuse to load — the registry fails loud.",
+    "`roles: [\"admin\"]` grants static admin role (role.admin.*)."
+  ],
+  "principals": [
+    {
+      "id": "owner",
+      "display_name": "Owner",
+      "roles": ["admin"],
+      "memx_key": "<replace_with_unique_key>",
+      "identities": [
+        {"channel": "telegram", "sender_id": "1000001"},
+        {"channel": "vk", "sender_id": "1000001"}
+      ]
+    },
+    {
+      "id": "member_a",
+      "display_name": "Member A",
+      "roles": [],
+      "memx_key": "<replace_with_unique_key_2>",
+      "identities": [
+        {"channel": "telegram", "sender_id": "1000002"}
+      ]
+    }
+  ]
+}

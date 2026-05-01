@@ -1,0 +1,26 @@
+# Personal-data blocklist for the pre-commit hook.
+#
+# Copy this file to ".githooks/blocklist" (gitignored) and add one
+# substring per line. Matching is case-insensitive and literal (no regex).
+# Empty lines and lines starting with '#' are ignored.
+#
+# Suggested categories (fill in your actual values in the local copy,
+# never here):
+#
+#   # Real names & nicknames (Cyrillic + Latin)
+#   YourFirstName
+#   YourLastName
+#   YourPartner
+#
+#   # Real channel ids (VK numeric, Telegram numeric, etc.)
+#   123456789
+#
+#   # Email
+#   you@example.com
+#
+#   # Production hosts / IPs
+#   prod.example.com
+#   203.0.113.42
+#
+#   # Secret tokens / API keys (also catch leaked tokens before push)
+#   AQVN...

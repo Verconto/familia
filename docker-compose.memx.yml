@@ -1,0 +1,61 @@
+# memX stack — scoped memory store (FastAPI + Redis).
+# Source в ./memx — subtree of https://github.com/MehulG/memX (MIT).
+# Не редактируй сам subtree (перезатрётся на `git subtree pull`), собираем
+# свой compose в корне, контекст билда — ./memx.
+#
+# Assistant-стек (docker-compose.yml) ходит сюда через MEMX_BASE_URL.
+# Дефолтный бинд — docker bridge gateway (172.17.0.1:8100), чтобы любой
+# контейнер на этом хосте мог достучаться без shared-network. Для
+# remote-деплоя замени bind на `127.0.0.1:8100` или публичный IP +
+# обнови MEMX_BASE_URL в .env у assistant'а.
+#
+# Запуск:
+#   docker compose -f docker-compose.memx.yml up -d --build
+#
+# ACL — memx/config/acl.json (дефолт: один dev-ключ `local_dev_key` с
+# wildcard). Для multi-actor пропиши отдельные ключи per-principal и
+# прокинь их в principals.json → memx_key.
+
+# Image source: ghcr.io/<owner>/memx:${MEMX_TAG:-0.4.0}.
+# To use a locally-built image instead, override with
+# `docker compose -f docker-compose.memx.yml -f docker-compose.memx.local.yml up -d`.
+
+services:
+  memx-backend:
+    container_name: memx-backend
+    image: ghcr.io/<owner>/memx:${MEMX_TAG:-0.4.0}
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+    restart: unless-stopped
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://memx-redis:6379/0}
+    ports:
+      - 172.17.0.1:8100:8000
+    volumes:
+      # Per-actor ACL. Mount read-only so the container cannot rewrite its own
+      # auth config. Copy memx-config/acl.example.json → memx-config/acl.json
+      # and fill in real keys before `up`.
+      - ./memx-config/acl.json:/app/config/acl.json:ro
+    depends_on:
+      memx-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/docs', timeout=2).status==200 else sys.exit(1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  memx-redis:
+    container_name: memx-redis
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - memx-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  memx-redis-data:
