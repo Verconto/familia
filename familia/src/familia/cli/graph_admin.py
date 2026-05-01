@@ -44,7 +44,6 @@ from familia.acl.graph_io import GraphIOError, load_graph_value, set_raw
 from familia.acl.schema import (
     ALLOWED_RELATIONS,
     TOPIC_KINDS,
-    Graph,
 )
 
 
@@ -841,8 +840,8 @@ def cmd_migrate_topic_to_principal(args: argparse.Namespace) -> int:
     print(f"promoted topic '{args.topic}' to principal (role: {args.role}).")
     print("Manual steps still required:")
     print(f"  1. Add principal entry to principals.json (id={args.topic}, role={args.role}).")
-    print(f"  2. Issue memx_key and add to acl.json with appropriate scopes.")
-    print(f"  3. Restart memX so the new key is picked up.")
+    print("  2. Issue memx_key and add to acl.json with appropriate scopes.")
+    print("  3. Restart memX so the new key is picked up.")
     return 0
 
 
@@ -1285,7 +1284,7 @@ def cmd_audit_untagged_topics(args: argparse.Namespace) -> int:
     """
     import re
     from collections import Counter
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     audit_path = Path(os.environ.get("FAMILIA_AUDIT_FILE", "audit.jsonl"))
     if not audit_path.exists():
@@ -1347,7 +1346,7 @@ def cmd_audit_untagged_topics(args: argparse.Namespace) -> int:
         return 0
 
     print(f"=== since {since.isoformat()} (limit={args.limit}) ===")
-    print(f"Frequent words in untagged records — possible new topics:\n")
+    print("Frequent words in untagged records — possible new topics:\n")
     for word, n in counts.most_common(args.limit):
         print(f"  {n:>4}  {word:<24} ← {sample[word]}")
     print()
@@ -1387,7 +1386,7 @@ def cmd_audit_tags(args: argparse.Namespace) -> int:
       * Top tags by frequency to spot stale/under-used ones.
     """
     from collections import Counter
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     audit_path = Path(os.environ.get("FAMILIA_AUDIT_FILE", "audit.jsonl"))
     if not audit_path.exists():

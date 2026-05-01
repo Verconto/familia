@@ -283,7 +283,7 @@ def make_reachable_tags_getter() -> Any:
         # asyncio.run/agent loop; so we always go through the executor
         # path when there IS a running loop.
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return _compute(actor_id)
         # Schedule the sync work on a worker thread so we don't block

@@ -162,10 +162,13 @@ About 5 minutes later the bot is replying in your family chat.
 - **SSH access to your VPS** — login (usually `root`) and password OR an SSH
   key.
 - **An LLM provider, your choice:**
-  - ChatGPT Plus or Claude Pro subscription — sign in via OAuth, no API key
-    needed, no extra cost;
-  - or an OpenAI / Anthropic / Groq API key — pay-as-you-go, typically a few
-    dollars a month for a family.
+  - **ChatGPT Plus / Pro subscription** — sign in via OAuth from the admin
+    (through OpenAI Codex). No API key needed, no extra cost. This is
+    OpenAI's official agentic-use path via Codex / CLI — not grey area.
+  - **API key** for OpenAI / Anthropic / Groq — pay-as-you-go, typically
+    a few dollars a month for a family. For Claude this is the only
+    path: Anthropic doesn't allow Claude Pro subscriptions to back
+    bots, so the admin doesn't expose an OAuth button for them.
 - **A channel** — a Telegram bot token (create one in
   [@BotFather](https://t.me/BotFather) in 30 seconds) OR a VK group access
   token (in the community settings).

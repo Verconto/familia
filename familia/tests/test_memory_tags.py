@@ -159,12 +159,24 @@ def test_set_with_reachable_tags_succeeds_wrapped(monkeypatch, graphs_in_memx):
         ))
     assert "Stored at" in out
     assert "теги: school, varya" in out
-    assert len(writes) == 1
-    written = writes[0]
-    parsed = json.loads(written["value"])
+    # MemorySetTool writes BOTH the value AND a private_index entry
+    # (``private:<actor>:value:shared_index`` / ``private_index``) so
+    # the agent can later list its own writes without an audit grep.
+    # The value goes first, the index second — verify both, but pin
+    # the value-write to writes[0] so the assertions below stay
+    # readable.
+    assert len(writes) == 2
+    value_write = writes[0]
+    assert value_write["key"] == "shared:varya.school_supplies"
+    parsed = json.loads(value_write["value"])
     assert parsed["__familia_acl_v1"] is True
     assert sorted(parsed["tags"]) == ["school", "varya"]
     assert parsed["value"] == "тетради, ручки"
+    # Sanity-check the index entry — full schema is exercised by
+    # test_memory_indexes; here we only confirm it's pointed at the
+    # actor and references the just-written key.
+    index_write = writes[1]
+    assert index_write["key"] == "private:member_a:value:shared_index"
 
 
 def test_admin_can_tag_anything(monkeypatch, graphs_in_memx):

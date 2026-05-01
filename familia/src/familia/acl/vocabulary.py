@@ -19,7 +19,6 @@ truth.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from familia.acl.reachable import reachable_persons, reachable_tag_ids
 from familia.acl.schema import Graph

@@ -21,7 +21,6 @@ scope-based check. The sentinel + literal-True check forecloses that.
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from familia.acl.schema import WRAP_SENTINEL, WRAP_SENTINEL_KEY, WrappedRecord
 
