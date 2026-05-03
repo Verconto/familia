@@ -32,18 +32,21 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from familia.principals import resolve_actor
 from loguru import logger
 from pydantic import Field
 
-from familia.principals import resolve_actor
 from nanobot.bus.events import CallbackEvent, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import Base
-
+from nanobot.utils.helpers import split_message
 
 VK_API_BASE = "https://api.vk.com/method"
+# VK messages.send hard limit is 4096 chars; leave a small safety margin
+# in case our count diverges from VK's (emoji / surrogate pairs, etc).
+VK_MAX_MESSAGE_LEN = 4000
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 _VK_COLORS = {"primary", "secondary", "positive", "negative"}
 
@@ -306,15 +309,22 @@ class VKChannel(BaseChannel):
             except Exception as e:
                 logger.error("VK: invalid keyboard spec: {}", e)
 
-        await self._api(
-            "messages.send",
-            peer_id=msg.chat_id,
-            message=msg.content or "",
-            random_id=random.randint(1, 2**31 - 1),
-            disable_mentions=1,
-            attachment=",".join(attachments) if attachments else None,
-            keyboard=keyboard_json,
-        )
+        # VK rejects messages.send with error 914 ("Message is too long")
+        # past 4096 chars. Split the body into chunks; attachments and the
+        # keyboard ride only the LAST chunk so buttons appear at the bottom.
+        text = msg.content or ""
+        chunks = split_message(text, VK_MAX_MESSAGE_LEN) if text else [""]
+        last = len(chunks) - 1
+        for idx, chunk in enumerate(chunks):
+            await self._api(
+                "messages.send",
+                peer_id=msg.chat_id,
+                message=chunk,
+                random_id=random.randint(1, 2**31 - 1),
+                disable_mentions=1,
+                attachment=",".join(attachments) if attachments and idx == last else None,
+                keyboard=keyboard_json if idx == last else None,
+            )
 
     async def _upload_media(self, peer_id: int, path: str) -> str:
         """Upload a local file to VK and return its ``<type><owner>_<id>`` ref."""
@@ -556,7 +566,11 @@ class VKChannel(BaseChannel):
                             logger.info("VK voice transcribed: {}...", transcription[:50])
                             notes.append(f"[transcription: {transcription}]")
                         else:
-                            notes.append(f"[voice: {path}]")
+                            logger.warning("VK: voice transcription empty for {}", path)
+                            notes.append(
+                                "[голосовое сообщение не удалось распознать — "
+                                "вежливо попроси повторить или прислать текстом]"
+                            )
                 elif att_type == "doc":
                     doc = att.get("doc") or {}
                     name = doc.get("title") or f"doc_{doc.get('id')}"
