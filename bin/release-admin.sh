@@ -145,5 +145,35 @@ cat >> dist/admin/CHANGELOG.md <<EOF
 - Built from commit: \`$(git rev-parse --short HEAD)\`
 EOF
 
+# Per-version release-notes file. The admin's UpdateAvailableDialog
+# fetches GitHub Releases API and renders ``body`` to help the user
+# decide whether to upgrade — so the body has to actually exist on
+# the release. Seed it with a placeholder; the human edits before
+# pushing the release. Skipped if a hand-edited file is already there.
+NOTES="dist/admin/release-notes-v${VER}.md"
+if [[ ! -f "$NOTES" ]]; then
+    cat > "$NOTES" <<EOF
+## Что нового в v${VER}
+
+- (опиши изменения, которые увидит пользователь — это покажется в
+  «Доступна новая версия» в админке)
+
+---
+
+SHA256 \`FamiliaAdmin-v${VER}.exe\`: \`${SHA}\`
+Built from commit: \`$(git rev-parse --short HEAD)\`
+EOF
+    echo "→ release notes stub: $NOTES (edit before publishing)"
+fi
+
 echo "✓ release v${VER} ready in dist/admin/"
-echo "  next: review CHANGELOG.md, then git add dist/admin/ && git commit"
+echo
+echo "Next:"
+echo "  1. Edit  $NOTES  — this becomes the GitHub release body and"
+echo "     what UpdateAvailableDialog shows to the user."
+echo "  2. Publish:"
+echo "       gh release create v${VER} \\"
+echo "         dist/admin/FamiliaAdmin-v${VER}.exe \\"
+echo "         dist/admin/WebView2Loader.dll \\"
+echo "         --title v${VER} \\"
+echo "         --notes-file $NOTES"
