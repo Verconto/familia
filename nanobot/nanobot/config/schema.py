@@ -29,6 +29,15 @@ class ChannelsConfig(Base):
     send_tool_hints: bool = False  # stream tool-call hints (e.g. read_file("…"))
     send_max_retries: int = Field(default=3, ge=0, le=10)  # Max delivery attempts (initial send included)
     transcription_provider: str = "groq"  # Voice transcription backend: "groq" or "openai"
+    # Cap cumulative STT seconds per inbound turn (current message +
+    # forwards + replied-to). Protects the user's STT quota when
+    # someone forwards a long voice / replies to a long audio.
+    transcription_audio_budget_s: int = Field(default=300, ge=0)
+    # BCP-47 language hint for STT. Yandex requires it (defaults to
+    # ``ru-RU`` if empty); Whisper/OpenAI/Groq auto-detect — passing
+    # it nudges the model when audio is short or noisy. Empty string
+    # = leave default. Format: ``ru-RU``, ``es-ES``, ``en-US`` etc.
+    transcription_lang: str = ""
 
 
 class DreamConfig(Base):

@@ -101,6 +101,18 @@ class ChannelManager:
                     channel.transcription_api_key = self._resolve_transcription_key(effective)
                     channel.transcription_api_base = self._resolve_transcription_base(effective)
                     channel.transcription_folder_id = self._resolve_transcription_folder_id(effective)
+                # Shared per-turn STT seconds budget. Channels that
+                # don't expose forward/reply re-processing simply
+                # ignore this attribute.
+                channel.audio_budget_s = int(
+                    getattr(self.config.channels, "transcription_audio_budget_s", 300)
+                    or 300
+                )
+                # Optional global STT language hint (empty = provider
+                # default).
+                channel.transcription_lang = (
+                    getattr(self.config.channels, "transcription_lang", "") or ""
+                )
                 self.channels[name] = channel
                 logger.info(
                     "{} channel enabled (stt={})",

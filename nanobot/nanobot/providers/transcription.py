@@ -29,10 +29,41 @@ from pathlib import Path
 import httpx
 from loguru import logger
 
-
 # ---------------------------------------------------------------------------
 # Shared chunking helper
 # ---------------------------------------------------------------------------
+
+async def probe_audio_duration_s(path: Path) -> float | None:
+    """Return the audio file's duration in seconds via ``ffprobe``.
+
+    None on failure — caller falls back to size-only routing. The
+    extra subprocess is ~30 ms on a typical VM, negligible compared
+    to the network round-trip we're about to make to the STT API.
+    """
+    if shutil.which("ffprobe") is None:
+        return None
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, _ = await proc.communicate()
+    except Exception:  # noqa: BLE001 — best-effort
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        return float(out.decode("utf-8", "replace").strip())
+    except ValueError:
+        return None
+
 
 async def split_audio_with_ffmpeg(
     path: Path,
@@ -159,13 +190,22 @@ class OpenAITranscriptionProvider:
     # leave headroom and limit per-chunk re-encode if we ever need it.
     CHUNK_DURATION_S = 600
 
-    def __init__(self, api_key: str | None = None, api_base: str | None = None):
+    def __init__(
+        self,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        language: str | None = None,
+    ):
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self.api_url = (
             api_base
             or os.environ.get("OPENAI_TRANSCRIPTION_BASE_URL")
             or "https://api.openai.com/v1/audio/transcriptions"
         )
+        # Whisper takes a 2-letter ISO-639-1 hint via ``language``;
+        # ``None`` lets it auto-detect. Caller passes BCP-47 like
+        # ``ru-RU`` which we normalise to the leading subtag.
+        self.language = (language or os.environ.get("STT_LANG") or "").split("-")[0] or None
 
     async def transcribe(self, file_path: str | Path) -> str:
         if not self.api_key:
@@ -206,7 +246,12 @@ class OpenAITranscriptionProvider:
         try:
             async with httpx.AsyncClient() as client:
                 with open(path, "rb") as f:
-                    files = {"file": (path.name, f), "model": (None, "whisper-1")}
+                    files = {
+                        "file": (path.name, f),
+                        "model": (None, "whisper-1"),
+                    }
+                    if self.language:
+                        files["language"] = (None, self.language)
                     headers = {"Authorization": f"Bearer {self.api_key}"}
                     response = await client.post(
                         self.api_url, headers=headers, files=files, timeout=60.0,
@@ -271,7 +316,17 @@ class YandexTranscriptionProvider:
             logger.error("Yandex STT: stat failed: {}", e)
             return ""
 
-        if size <= self.MAX_PAYLOAD_BYTES:
+        # Yandex enforces TWO independent limits: 1 MB payload AND 30 s
+        # duration. A low-bitrate Opus voice (e.g. 124 s @ ~5 KB/s in
+        # Spanish) easily fits the byte cap but trips the duration
+        # check — server replies BAD_REQUEST without ever decoding the
+        # audio. Probe duration up-front and force a split when EITHER
+        # limit would be exceeded.
+        duration = await probe_audio_duration_s(path)
+        needs_split = size > self.MAX_PAYLOAD_BYTES or (
+            duration is not None and duration > self.CHUNK_DURATION_S
+        )
+        if not needs_split:
             return await self._transcribe_bytes(path.read_bytes())
 
         chunks = await split_audio_with_ffmpeg(
@@ -334,13 +389,21 @@ class GroqTranscriptionProvider:
     MAX_PAYLOAD_BYTES = 24 * 1024 * 1024
     CHUNK_DURATION_S = 600
 
-    def __init__(self, api_key: str | None = None, api_base: str | None = None):
+    def __init__(
+        self,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        language: str | None = None,
+    ):
         self.api_key = api_key or os.environ.get("GROQ_API_KEY")
         self.api_url = (
             api_base
             or os.environ.get("GROQ_BASE_URL")
             or "https://api.groq.com/openai/v1/audio/transcriptions"
         )
+        # Whisper takes a 2-letter ISO-639-1 hint via ``language``; we
+        # accept BCP-47 (``ru-RU``) and strip to the leading subtag.
+        self.language = (language or os.environ.get("STT_LANG") or "").split("-")[0] or None
 
     async def transcribe(self, file_path: str | Path) -> str:
         if not self.api_key:
@@ -385,6 +448,8 @@ class GroqTranscriptionProvider:
                         "file": (path.name, f),
                         "model": (None, "whisper-large-v3"),
                     }
+                    if self.language:
+                        files["language"] = (None, self.language)
                     headers = {"Authorization": f"Bearer {self.api_key}"}
                     response = await client.post(
                         self.api_url,

@@ -32,6 +32,27 @@ TELEGRAM_MAX_MESSAGE_LEN = 4000  # Telegram message character limit
 # the final rendered message never overflows.
 TELEGRAM_HTML_MAX_LEN = 4096
 TELEGRAM_REPLY_CONTEXT_MAX_LEN = TELEGRAM_MAX_MESSAGE_LEN  # Max length for reply context in user message
+# Default per-turn STT seconds cap. Admin-configurable via
+# ``config.channels.transcriptionAudioBudgetS``; falls back to this
+# constant when the channel manager hasn't set ``audio_budget_s``.
+TELEGRAM_AUDIO_BUDGET_S_DEFAULT = 300
+
+
+class _TgAudioBudget:
+    """Mutable shared budget for STT across one inbound turn (current + reply)."""
+
+    __slots__ = ("remaining_s",)
+
+    def __init__(self, total_s: int = TELEGRAM_AUDIO_BUDGET_S_DEFAULT):
+        self.remaining_s = total_s
+
+    def try_spend(self, duration_s: int) -> bool:
+        if duration_s <= 0:
+            duration_s = 1
+        if self.remaining_s <= 0:
+            return False
+        self.remaining_s -= duration_s
+        return True
 
 
 def _escape_telegram_html(text: str) -> str:
@@ -783,9 +804,20 @@ class TelegramChannel(BaseChannel):
             return f"[Reply to: {text}]"
 
     async def _download_message_media(
-        self, msg, *, add_failure_content: bool = False
+        self,
+        msg,
+        *,
+        add_failure_content: bool = False,
+        audio_budget: "_TgAudioBudget | None" = None,
     ) -> tuple[list[str], list[str]]:
-        """Download media from a message (current or reply). Returns (media_paths, content_parts)."""
+        """Download media from a message (current or reply). Returns (media_paths, content_parts).
+
+        ``audio_budget`` is an optional shared cap on cumulative STT
+        seconds across the inbound message + its reply (see callers).
+        Voice/audio that overruns the budget gets a textual stub
+        instead of a transcription so we don't blow through the STT
+        quota on a forwarded long voice / replied-to lecture.
+        """
         media_file = None
         media_type = None
         if getattr(msg, "photo", None):
@@ -824,6 +856,16 @@ class TelegramChannel(BaseChannel):
             await file.download_to_drive(str(file_path))
             path_str = str(file_path)
             if media_type in ("voice", "audio"):
+                duration = int(getattr(media_file, "duration", 0) or 0)
+                if audio_budget is not None and not audio_budget.try_spend(duration):
+                    logger.info(
+                        "Telegram: skipping STT for {} (audio budget exhausted)",
+                        path_str,
+                    )
+                    return [path_str], [
+                        f"[{media_type} {duration}s — не распознавали "
+                        "(превышен общий лимит распознавания на это сообщение)]"
+                    ]
                 transcription = await self.transcribe_audio(file_path)
                 if transcription:
                     logger.info("Transcribed {}: {}...", media_type, transcription[:50])
@@ -971,9 +1013,19 @@ class TelegramChannel(BaseChannel):
             lon = message.location.longitude
             content_parts.append(f"[location: {lat}, {lon}]")
 
+        # Shared STT budget for current + reply (depth-1). Forwarded
+        # Telegram messages don't have a separate envelope — Telegram
+        # delivers the forwarded payload AS the inbound message, so
+        # the current-message branch already covers them. The cap is
+        # admin-configurable via
+        # ``config.channels.transcriptionAudioBudgetS``.
+        audio_budget = _TgAudioBudget(
+            total_s=int(getattr(self, "audio_budget_s", None) or TELEGRAM_AUDIO_BUDGET_S_DEFAULT)
+        )
+
         # Download current message media
         current_media_paths, current_media_parts = await self._download_message_media(
-            message, add_failure_content=True
+            message, add_failure_content=True, audio_budget=audio_budget,
         )
         media_paths.extend(current_media_paths)
         content_parts.extend(current_media_parts)
@@ -984,7 +1036,9 @@ class TelegramChannel(BaseChannel):
         reply = getattr(message, "reply_to_message", None)
         if reply is not None:
             reply_ctx = await self._extract_reply_context(message)
-            reply_media, reply_media_parts = await self._download_message_media(reply)
+            reply_media, reply_media_parts = await self._download_message_media(
+                reply, audio_budget=audio_budget,
+            )
             if reply_media:
                 media_paths = reply_media + media_paths
                 logger.debug("Attached replied-to media: {}", reply_media[0])

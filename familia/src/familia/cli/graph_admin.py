@@ -1144,14 +1144,11 @@ def cmd_migrate_hybrid_storage(args: argparse.Namespace) -> int:
 # prune or extend afterwards. Aliases avoid kinship roots ('жен-', 'слав-')
 # and don't collide with KINSHIP_RU.
 _DEFAULT_TOPICS = [
-    ("school",    "Школа",        ["школу", "уроки", "учёба", "учеба"]),
-    ("finance",   "Финансы",      ["деньги", "счёт", "счета", "банк", "налог"]),
-    ("health",    "Здоровье",     ["врач", "приём", "прием", "анализы", "клиника"]),
-    ("work",      "Работа",       ["офис", "встреча", "проект", "командировка"]),
-    ("travel",    "Путешествия",  ["поездка", "отпуск", "билет", "виза"]),
-    ("home",      "Быт",          ["быт", "уборка", "ремонт", "коммуналка"]),
-    ("holidays",  "Праздники",    ["праздник", "юбилей", "годовщина"]),
-    ("shopping",  "Покупки",      ["купить", "магазин", "заказать"]),
+    ("health",  "Здоровье",     ["врач", "приём", "прием", "анализы", "клиника"]),
+    ("work",    "Работа",       ["офис", "встреча", "проект", "командировка"]),
+    ("finance", "Финансы",      ["деньги", "счёт", "счета", "банк", "налог"]),
+    ("travel",  "Путешествия",  ["поездка", "отпуск", "билет", "виза"]),
+    ("home",    "Быт",          ["быт", "уборка", "ремонт", "коммуналка"]),
 ]
 
 
@@ -1792,6 +1789,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_stt_default.add_argument("provider",
                                choices=sorted(STT_PROVIDER_CHOICES))
     p_stt_default.set_defaults(func=cmd_stt_set_default)
+
+    p_stt_budget = pst_sub.add_parser(
+        "set-audio-budget",
+        help="set the per-turn STT audio budget (seconds) — caps cumulative "
+             "voice transcription per inbound message including forwards/replies",
+    )
+    p_stt_budget.add_argument("seconds", type=int)
+    p_stt_budget.set_defaults(func=cmd_stt_set_audio_budget)
+
+    p_stt_lang = pst_sub.add_parser(
+        "set-lang",
+        help="set the BCP-47 STT language hint (e.g. ru-RU, es-ES, en-US). "
+             "Empty string = provider default.",
+    )
+    p_stt_lang.add_argument("lang", type=str)
+    p_stt_lang.set_defaults(func=cmd_stt_set_lang)
 
     # agents ...  read/write the LLM-agent slots (main + fallback) that
     # familia-gateway uses; live in nanobot's config.json.
@@ -3638,11 +3651,31 @@ def cmd_stt_get(args: argparse.Namespace) -> int:
         })
     overrides.sort(key=lambda r: r["channel"])
 
+    raw_budget = (
+        channels_raw.get("transcriptionAudioBudgetS")
+        or channels_raw.get("transcription_audio_budget_s")
+        or 0
+    )
+    try:
+        audio_budget_s = int(raw_budget)
+    except (TypeError, ValueError):
+        audio_budget_s = 0
+    if audio_budget_s <= 0:
+        audio_budget_s = 300  # backend default — see channels/base.py
+
+    lang = (
+        channels_raw.get("transcriptionLang")
+        or channels_raw.get("transcription_lang")
+        or ""
+    )
+
     payload = {
         "global_default": global_default,
         "providers": [_provider_view(k) for k in sorted(STT_CRED_PROVIDERS)],
         "channels": overrides,
         "supported_choices": sorted(STT_PROVIDER_CHOICES),
+        "audio_budget_s": audio_budget_s,
+        "lang": lang,
     }
     if args.json:
         print(json.dumps(payload, ensure_ascii=False))
@@ -3687,6 +3720,45 @@ def cmd_stt_set(args: argparse.Namespace) -> int:
     )
     print(f"stt provider {args.provider!r} updated in {path} "
           f"(gateway restart required)")
+    return 0
+
+
+def cmd_stt_set_audio_budget(args: argparse.Namespace) -> int:
+    """Persist the global per-turn STT audio budget (seconds)."""
+    if args.seconds < 0:
+        print("error: seconds must be non-negative", file=sys.stderr)
+        return 2
+    path, raw = _load_config_json()
+    channels = raw.setdefault("channels", {})
+    channels["transcriptionAudioBudgetS"] = int(args.seconds)
+    channels.pop("transcription_audio_budget_s", None)
+    _save_config_json(path, raw)
+    audit.log_event(
+        "stt_audio_budget_set",
+        actor=None,
+        reason=f"audio_budget_s={args.seconds};reload-required",
+    )
+    print(f"stt audio budget = {args.seconds}s in {path} (gateway reload required)")
+    return 0
+
+
+def cmd_stt_set_lang(args: argparse.Namespace) -> int:
+    """Persist the BCP-47 STT language hint into config.channels."""
+    lang = (args.lang or "").strip()
+    path, raw = _load_config_json()
+    channels = raw.setdefault("channels", {})
+    if lang:
+        channels["transcriptionLang"] = lang
+    else:
+        channels.pop("transcriptionLang", None)
+    channels.pop("transcription_lang", None)
+    _save_config_json(path, raw)
+    audit.log_event(
+        "stt_lang_set",
+        actor=None,
+        reason=f"lang={lang!r};reload-required",
+    )
+    print(f"stt language = {lang!r} in {path} (gateway reload required)")
     return 0
 
 

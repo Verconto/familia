@@ -101,6 +101,14 @@ mv -f "$SRC_PACK_TMP/familia-source-v${VER}.tar.gz" "$SRC_PACK"
 rm -rf "$SRC_PACK_TMP"
 echo "  embedded: $SRC_PACK ($(du -h "$SRC_PACK" | cut -f1))"
 
+# SHA256 of the source-pack — build.rs reads this and bakes it into
+# ``FAMILIA_SOURCE_PACK_SHA256`` so the orchestrator on the VM can
+# verify either the GitHub-fetched copy or the SSH-fallback upload
+# matches the bytes the .exe was built with.
+SRC_PACK_SHA=$(sha256sum "$SRC_PACK" | awk '{print $1}')
+echo "$SRC_PACK_SHA  $(basename "$SRC_PACK")" > "$SRC_PACK.sha256"
+echo "  source-pack sha256: $SRC_PACK_SHA"
+
 echo "→ tauri build"
 (cd admin && pnpm tauri build)
 
@@ -134,6 +142,14 @@ SHA=$(sha256sum "$OUT" | awk '{print $1}')
 echo "$SHA  FamiliaAdmin-v${VER}.exe" > "$OUT.sha256"
 DLL_SHA=$(sha256sum "$DLL_OUT" | awk '{print $1}')
 echo "$DLL_SHA  WebView2Loader.dll" > "$DLL_OUT.sha256"
+
+# Versioned source-pack copy for ``gh release upload``. The orchestrator
+# on the VM tries this exact URL first (constructed from the admin's
+# CARGO_PKG_VERSION) and falls back to an SSH upload of the embedded
+# copy on failure. SHA must match what's baked into the .exe.
+SRC_PACK_VERSIONED="dist/admin/familia-source-v${VER}.tar.gz"
+cp -f "$SRC_PACK" "$SRC_PACK_VERSIONED"
+cp -f "$SRC_PACK.sha256" "$SRC_PACK_VERSIONED.sha256"
 
 echo "→ changelog"
 cat >> dist/admin/CHANGELOG.md <<EOF
@@ -175,5 +191,7 @@ echo "  2. Publish:"
 echo "       gh release create v${VER} \\"
 echo "         dist/admin/FamiliaAdmin-v${VER}.exe \\"
 echo "         dist/admin/WebView2Loader.dll \\"
+echo "         dist/admin/familia-source-v${VER}.tar.gz \\"
+echo "         dist/admin/familia-source-v${VER}.tar.gz.sha256 \\"
 echo "         --title v${VER} \\"
 echo "         --notes-file $NOTES"

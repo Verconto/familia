@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from lark_oapi.api.im.v1.model import MentionEvent, P2ImMessageReceiveV1
+from lark_oapi.core.const import FEISHU_DOMAIN, LARK_DOMAIN
 from loguru import logger
 from pydantic import Field
 
@@ -21,8 +22,6 @@ from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import Base
-
-from lark_oapi.core.const import FEISHU_DOMAIN, LARK_DOMAIN
 
 FEISHU_AVAILABLE = importlib.util.find_spec("lark_oapi") is not None
 

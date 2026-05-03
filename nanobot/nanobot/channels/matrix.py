@@ -29,10 +29,11 @@ try:
         RoomMessageMedia,
         RoomMessageText,
         RoomSendError,
+        RoomSendResponse,
         RoomTypingError,
         SyncError,
-        UploadError, RoomSendResponse,
-)
+        UploadError,
+    )
     from nio.crypto.attachments import decrypt_attachment
     from nio.exceptions import EncryptionError
 except ImportError as e:
@@ -534,7 +535,7 @@ class MatrixChannel(BaseChannel):
                 return
 
             await self._stop_typing_keepalive(chat_id, clear_typing=True)
-            
+
             content = _build_matrix_text_content(
                 buf.text,
                 buf.event_id,
@@ -548,7 +549,7 @@ class MatrixChannel(BaseChannel):
             buf = _StreamBuf()
             self._stream_bufs[chat_id] = buf
         buf.text += delta
-    
+
         if not buf.text.strip():
             return
 

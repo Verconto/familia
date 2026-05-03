@@ -90,8 +90,22 @@ RUN git config --global --add url."https://github.com/".insteadOf ssh://git@gith
     npm install && npm run build
 WORKDIR /app
 
-# Create non-root user and config directory
-RUN useradd -m -u 1000 -s /bin/bash nanobot && \
+# Create non-root user and config directory.
+#
+# uid/gid are build-args so the container's ``nanobot`` matches the
+# host operator running ``docker compose build``. Without this, the
+# bind-mounted ``~/.nanobot`` ends up owned by the container's uid
+# (default 1000) on the host, which on a multi-user VM (e.g. one
+# where uid 1000 belongs to a different account than the operator)
+# blocks the operator from writing to their own home dir.
+# bootstrap.sh passes ``$(id -u)`` / ``$(id -g)`` of the operator
+# (clamped to >= 1000 for security: never make the container user
+# effectively root).
+ARG NANOBOT_UID=1000
+ARG NANOBOT_GID=1000
+RUN groupadd -g ${NANOBOT_GID} nanobot 2>/dev/null \
+        || groupmod -n nanobot $(getent group ${NANOBOT_GID} | cut -d: -f1) && \
+    useradd -m -u ${NANOBOT_UID} -g ${NANOBOT_GID} -s /bin/bash nanobot && \
     mkdir -p /home/nanobot/.nanobot && \
     chown -R nanobot:nanobot /home/nanobot /app
 

@@ -6,9 +6,9 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
+from familia.principals import resolve_actor
 from loguru import logger
 
-from familia.principals import resolve_actor
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 
@@ -27,6 +27,16 @@ class BaseChannel(ABC):
     transcription_api_key: str = ""
     transcription_api_base: str = ""
     transcription_folder_id: str = ""  # yandex-only; ignored by openai/groq
+    # BCP-47 language hint passed to the STT provider. Empty = use
+    # provider default (Yandex falls back to ru-RU; OpenAI/Groq
+    # auto-detect). Configured globally via
+    # ``config.channels.transcriptionLang``.
+    transcription_lang: str = ""
+    # Per-turn STT seconds cap (set by ChannelManager from
+    # config.channels.transcriptionAudioBudgetS). Channels that
+    # support forward/reply re-processing share this budget across
+    # the inbound message + nested forwards/replies.
+    audio_budget_s: int = 300
 
     def __init__(self, config: Any, bus: MessageBus):
         """
@@ -41,15 +51,39 @@ class BaseChannel(ABC):
         self._running = False
 
     async def transcribe_audio(self, file_path: str | Path) -> str:
-        """Transcribe an audio file via Whisper (OpenAI or Groq). Returns empty string on failure."""
+        """Transcribe an audio file via Whisper (OpenAI/Groq) or Yandex SpeechKit.
+
+        Returns empty string on failure. A ``<file>.txt`` sidecar is
+        written next to the audio after a successful run; on subsequent
+        calls (forward / reply re-processing) we read the sidecar and
+        skip the API round-trip — saves STT quota for the same voice
+        being seen multiple times.
+        """
         if not self.transcription_api_key:
             return ""
+
+        path = Path(file_path)
+        cache_path = path.with_suffix(path.suffix + ".txt")
+        if cache_path.exists():
+            try:
+                cached = cache_path.read_text(encoding="utf-8").strip()
+                if cached:
+                    logger.debug("{}: transcript cache hit for {}", self.name, path.name)
+                    return cached
+            except OSError as e:
+                logger.warning(
+                    "{}: transcript cache read failed for {}: {}",
+                    self.name, path.name, e,
+                )
+
+        lang = self.transcription_lang or None
         try:
             if self.transcription_provider == "openai":
                 from nanobot.providers.transcription import OpenAITranscriptionProvider
                 provider = OpenAITranscriptionProvider(
                     api_key=self.transcription_api_key,
                     api_base=self.transcription_api_base or None,
+                    language=lang,
                 )
             elif self.transcription_provider == "yandex":
                 from nanobot.providers.transcription import YandexTranscriptionProvider
@@ -57,17 +91,29 @@ class BaseChannel(ABC):
                     api_key=self.transcription_api_key,
                     folder_id=self.transcription_folder_id or None,
                     api_base=self.transcription_api_base or None,
+                    lang=lang,
                 )
             else:
                 from nanobot.providers.transcription import GroqTranscriptionProvider
                 provider = GroqTranscriptionProvider(
                     api_key=self.transcription_api_key,
                     api_base=self.transcription_api_base or None,
+                    language=lang,
                 )
-            return await provider.transcribe(file_path)
+            text = await provider.transcribe(file_path)
         except Exception as e:
             logger.warning("{}: audio transcription failed: {}", self.name, e)
             return ""
+
+        if text:
+            try:
+                cache_path.write_text(text, encoding="utf-8")
+            except OSError as e:
+                logger.warning(
+                    "{}: transcript cache write failed for {}: {}",
+                    self.name, path.name, e,
+                )
+        return text
 
     async def login(self, force: bool = False) -> bool:
         """

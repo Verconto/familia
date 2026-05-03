@@ -47,6 +47,28 @@ VK_API_BASE = "https://api.vk.com/method"
 # VK messages.send hard limit is 4096 chars; leave a small safety margin
 # in case our count diverges from VK's (emoji / surrogate pairs, etc).
 VK_MAX_MESSAGE_LEN = 4000
+# Default cap on cumulative STT spend per inbound turn (used when
+# the channel manager hasn't set ``audio_budget_s`` from
+# ``config.channels.transcriptionAudioBudgetS``). The admin's STT
+# settings card writes a per-VM value that overrides this.
+VK_AUDIO_BUDGET_S_DEFAULT = 300
+
+
+class _AudioBudget:
+    """Mutable shared budget for STT calls across one inbound turn."""
+
+    __slots__ = ("remaining_s",)
+
+    def __init__(self, total_s: int = VK_AUDIO_BUDGET_S_DEFAULT):
+        self.remaining_s = total_s
+
+    def try_spend(self, duration_s: int) -> bool:
+        if duration_s <= 0:
+            duration_s = 1  # unknown duration: charge minimum
+        if self.remaining_s <= 0:
+            return False
+        self.remaining_s -= duration_s
+        return True
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 _VK_COLORS = {"primary", "secondary", "positive", "negative"}
 
@@ -418,9 +440,57 @@ class VKChannel(BaseChannel):
         # send() cancels this once the reply starts going out.
         self._start_typing(str(peer_id))
 
-        media_paths, content_extras = await self._download_attachments(
-            message.get("attachments") or []
+        # Audio budget shared across the inbound message + any
+        # forwarded / replied-to nested messages (depth 1). Caps the
+        # cumulative STT spend per turn — admin-configurable via
+        # ``config.channels.transcriptionAudioBudgetS``; falls back to
+        # the module default when the channel manager hasn't set it.
+        audio_budget = _AudioBudget(
+            total_s=int(getattr(self, "audio_budget_s", None) or VK_AUDIO_BUDGET_S_DEFAULT)
         )
+
+        media_paths, content_extras = await self._download_attachments(
+            message.get("attachments") or [], audio_budget=audio_budget,
+        )
+
+        # Reply context (depth 1): VK delivers a single ``reply_message``
+        # alongside the new one. We re-process its attachments so the
+        # agent sees the original photo / voice / file when the user
+        # asks "что это?" pointing back at it.
+        reply_msg = message.get("reply_message")
+        if isinstance(reply_msg, dict):
+            r_paths, r_notes = await self._download_attachments(
+                reply_msg.get("attachments") or [], audio_budget=audio_budget,
+            )
+            r_text = (reply_msg.get("text") or "").strip()
+            label = f"[reply to {reply_msg.get('from_id', '?')}]:"
+            block = [label]
+            if r_text:
+                block.append(r_text)
+            block.extend(r_notes)
+            content_extras = block + content_extras
+            media_paths = r_paths + media_paths
+
+        # Forward chain (depth 1): VK puts every forwarded message into
+        # ``fwd_messages`` (top-level forwards only). We cap at 5 to
+        # avoid runaway expansion when someone forwards a thread.
+        fwd = message.get("fwd_messages") or []
+        if isinstance(fwd, list) and fwd:
+            for fw in fwd[:5]:
+                if not isinstance(fw, dict):
+                    continue
+                f_paths, f_notes = await self._download_attachments(
+                    fw.get("attachments") or [], audio_budget=audio_budget,
+                )
+                f_text = (fw.get("text") or "").strip()
+                label = f"[forwarded from {fw.get('from_id', '?')}]:"
+                block = [label]
+                if f_text:
+                    block.append(f_text)
+                block.extend(f_notes)
+                content_extras.extend(block)
+                media_paths.extend(f_paths)
+
         content = text
         if content_extras:
             content = (content + "\n" if content else "") + "\n".join(content_extras)
@@ -540,12 +610,22 @@ class VKChannel(BaseChannel):
     # --- Inbound media -----------------------------------------------------
 
     async def _download_attachments(
-        self, attachments: list[dict[str, Any]]
+        self,
+        attachments: list[dict[str, Any]],
+        *,
+        audio_budget: _AudioBudget | None = None,
     ) -> tuple[list[str], list[str]]:
-        """Return (local_paths, content_annotations) for inbound attachments."""
+        """Return (local_paths, content_annotations) for inbound attachments.
+
+        ``audio_budget`` lets the caller share a per-turn STT budget
+        across the new message + any forwarded / replied-to nested
+        messages (depth 1). When None, an unconstrained per-call
+        budget is used.
+        """
         media_paths: list[str] = []
         notes: list[str] = []
         media_dir = get_media_dir("vk")
+        budget = audio_budget if audio_budget is not None else _AudioBudget()
 
         for att in attachments:
             att_type = att.get("type")
@@ -561,6 +641,18 @@ class VKChannel(BaseChannel):
                     path = await self._download_to(url, media_dir, f"voice_{am.get('id')}.ogg")
                     if path:
                         media_paths.append(path)
+                        duration = int(am.get("duration") or 0)
+                        if not budget.try_spend(duration):
+                            logger.info(
+                                "VK: skipping STT for {} (audio budget exhausted)",
+                                path,
+                            )
+                            notes.append(
+                                f"[голосовое сообщение {duration}s — "
+                                "не распознавали (превышен общий лимит "
+                                "распознавания на это сообщение)]"
+                            )
+                            continue
                         transcription = await self.transcribe_audio(path)
                         if transcription:
                             logger.info("VK voice transcribed: {}...", transcription[:50])
@@ -596,6 +688,45 @@ class VKChannel(BaseChannel):
                         if path:
                             media_paths.append(path)
                             notes.append(f"[sticker: {path}]")
+                elif att_type == "video":
+                    # VK doesn't expose a public byte URL for videos —
+                    # download requires the ``video.get`` API call and
+                    # auth-token-bound player URLs. Surface the metadata
+                    # so the agent can at least talk about it ("video
+                    # titled X by Y, 1m 23s").
+                    v = att.get("video") or {}
+                    title = (v.get("title") or "").strip() or "untitled"
+                    desc = (v.get("description") or "").strip()
+                    dur = int(v.get("duration") or 0)
+                    parts = [f"video {title!r} ({dur}s)"]
+                    if desc:
+                        parts.append(f"описание: {desc[:200]}")
+                    notes.append(f"[{', '.join(parts)}]")
+                elif att_type == "audio":
+                    # Music track. VK's ``audio.get`` is similarly
+                    # token-gated; surface artist/title.
+                    a = att.get("audio") or {}
+                    artist = (a.get("artist") or "").strip()
+                    title = (a.get("title") or "").strip() or "untitled"
+                    dur = int(a.get("duration") or 0)
+                    label = f"{artist} — {title}" if artist else title
+                    notes.append(f"[audio: {label} ({dur}s)]")
+                elif att_type == "link":
+                    # Forwarded shared link (article, etc.).
+                    lk = att.get("link") or {}
+                    url = lk.get("url") or ""
+                    title = (lk.get("title") or "").strip()
+                    notes.append(
+                        f"[link: {title}]({url})" if title else f"[link: {url}]"
+                    )
+                elif att_type == "wall":
+                    # Forwarded VK post — surface text (no media re-fetch).
+                    w = att.get("wall") or {}
+                    w_text = (w.get("text") or "").strip()
+                    if w_text:
+                        notes.append(f"[wall post: {w_text[:400]}]")
+                    else:
+                        notes.append("[wall post: (empty text)]")
                 else:
                     notes.append(f"[{att_type}: unsupported]")
             except Exception as e:

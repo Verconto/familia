@@ -56,8 +56,7 @@ def test_seed_defaults_apply_creates_all_known_ids(fake_store):
     rc = _run(["migrate", "seed-default-topics", "--apply"])
     assert rc == 0
     ids = {n["id"] for n in store[graph_admin.TOPICS_KEY]["nodes"]}
-    assert {"school", "finance", "health", "work", "travel",
-            "home", "holidays", "shopping"} == ids
+    assert {"health", "work", "finance", "travel", "home"} == ids
 
 
 def test_seed_defaults_connects_to_each_principal(fake_store):
@@ -69,8 +68,8 @@ def test_seed_defaults_connects_to_each_principal(fake_store):
     rc = _run(["migrate", "seed-default-topics", "--apply"])
     assert rc == 0
     edges = store[graph_admin.TOPICS_KEY]["edges"]
-    # 8 topics × 2 principals = 16 concerns edges
-    assert len(edges) == 16
+    # 5 topics × 2 principals = 10 concerns edges
+    assert len(edges) == 10
     for e in edges:
         assert e["rel"] == "concerns"
         assert e["concerns_as"] == "guardian_of"
@@ -89,16 +88,16 @@ def test_seed_defaults_idempotent(fake_store):
 
 
 def test_seed_defaults_skips_id_already_in_principals(fake_store):
-    """SR-8: if a principal happens to be named 'school', skip the seed."""
+    """SR-8: if a principal happens to be named 'health', skip the seed."""
     store, _ = fake_store
     store[graph_admin.FAMILY_KEY]["nodes"] = [
-        {"id": "school", "type": "principal"},  # collision
+        {"id": "health", "type": "principal"},  # collision
         {"id": "owner", "type": "principal"},
     ]
     rc = _run(["migrate", "seed-default-topics", "--apply"])
     assert rc == 0
     ids = {n["id"] for n in store[graph_admin.TOPICS_KEY]["nodes"]}
-    assert "school" not in ids  # skipped due to collision
+    assert "health" not in ids  # skipped due to collision
     assert "finance" in ids  # others created
 
 

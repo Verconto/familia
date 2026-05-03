@@ -24,6 +24,11 @@ dist/admin/*.exe
 dist/admin/*.exe.sha256
 dist/admin/WebView2Loader.dll
 dist/admin/WebView2Loader.dll.sha256
+# Per-version source-pack uploaded as a release asset (~3.6 MB each).
+# Lives only in dist/admin/ for ``gh release create``; the orchestrator
+# on the VM downloads from GitHub by URL — not from this repo.
+dist/admin/familia-source-v*.tar.gz
+dist/admin/familia-source-v*.tar.gz.sha256
 
 # release-admin.sh appends to dist/admin/CHANGELOG.md as a side-effect;
 # the canonical changelog lives in notes/admin-changelog-internal.md and
