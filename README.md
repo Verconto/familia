@@ -9,6 +9,18 @@ or kids.
 Repo: <https://github.com/Verconto/familia>. Latest release — `v0.5.60`,
 backend `0.2.3`.
 
+## Try it live
+
+A public demo runs on Telegram: **[@FamiliaAssistant_bot](https://t.me/FamiliaAssistant_bot)**.
+Just say hi — your session is created automatically and isolated from every
+other demo user. No signup, no setup. Send text, voice, photos, or
+documents in any language.
+
+Heads up: it's a public demo. Don't share sensitive personal data
+(passwords, IDs, medical details). Demo profiles may be cleared without
+notice. To run your own private instance, see
+[How to set it up](#how-to-set-it-up-15-minutes) below.
+
 ## Status
 
 > **Status:** hobby project, maintained by one person. No SLA, no PR review.
