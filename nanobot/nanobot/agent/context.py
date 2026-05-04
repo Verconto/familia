@@ -93,6 +93,35 @@ class ContextBuilder:
         if shared_index_block:
             parts.append(shared_index_block)
 
+        # Peers' shared-key indexes — every family member connected by
+        # any edge in family.graph (looser than the peer-edge gate, so
+        # children see their parents' listings). The index gives names
+        # only; the LLM still calls memory_get scope='shared' to read
+        # values, gated by the per-record tag-ACL.
+        peer_shared_block = self._build_peer_index_block(
+            actor,
+            suffix="value:shared_index",
+            scope_label="shared",
+            heading="Family members' shared keys",
+            relation="family",
+        )
+        if peer_shared_block:
+            parts.append(peer_shared_block)
+
+        # Peers' private-key indexes — only across true peer-edges
+        # (spouse_of / guardian_of, child role excluded). Surfaces the
+        # spouse's reminders / journal entry names without exposing
+        # them to children.
+        peer_private_block = self._build_peer_index_block(
+            actor,
+            suffix="value:private_index",
+            scope_label="private",
+            heading="Peers' private keys",
+            relation="peer",
+        )
+        if peer_private_block:
+            parts.append(peer_private_block)
+
         # Peers' USER stitched in (Phase 3). Empty when actor is None
         # (no familia) or no peers / policy denies all.
         peer_block = self._build_peer_user_block(actor)
@@ -285,9 +314,16 @@ class ContextBuilder:
             return ""
         if not isinstance(keys, list):
             return ""
+        # Index entries are either bare strings (legacy) or
+        # ``{"name": str, "tags": [str, ...]}`` (current); accept both.
         # Newest first — same order MRU eviction uses, which is what an
         # operator would expect in a "recent keys" listing.
-        names = [k for k in reversed(keys) if isinstance(k, str) and k]
+        names: list[str] = []
+        for entry in reversed(keys):
+            if isinstance(entry, str) and entry:
+                names.append(entry)
+            elif isinstance(entry, dict) and isinstance(entry.get("name"), str) and entry["name"]:
+                names.append(entry["name"])
         if not names:
             return ""
         bullet_list = "\n".join(f"- {n}" for n in names)
@@ -299,6 +335,173 @@ class ContextBuilder:
             "bare key name. Newest first.\n\n"
             f"{bullet_list}"
         )
+
+    # Cap on bullets surfaced per peer in the cross-principal index
+    # blocks. A spouse with hundreds of shared keys would otherwise
+    # eat token budget and dilute attention on more recent entries.
+    # MRU order means the cap discards stale tail items first.
+    _PEER_INDEX_MAX_KEYS_PER_PEER = 40
+
+    def _build_peer_index_block(
+        self,
+        actor: str | None,
+        *,
+        suffix: str,
+        scope_label: str,
+        heading: str,
+        relation: str,
+    ) -> str:
+        """Render a system-prompt block listing peers' custom keys.
+
+        Reads ``private:<peer>:<suffix>`` for every other principal that
+        passes the ``relation`` predicate, via
+        :meth:`PrincipalMemoryClient.get_other` so the cross-principal
+        read goes through the policy engine + memX ACL. Empty bodies,
+        denied reads and unparseable JSON are skipped silently.
+
+        ``relation`` controls who counts as a peer for this block:
+
+        * ``"peer"`` — :func:`familia.acl.peers.is_peer` (spouse_of /
+          guardian_of, child role excluded). Use for ``private`` keys
+          where the asymmetric privacy guarantee must hold.
+        * ``"family"`` — :func:`familia.acl.peers.is_family_member`
+          (any edge in family.graph, no role exclusion). Use for
+          ``shared`` keys that should be discoverable across the whole
+          family graph including child→parent direction.
+
+        Output shape::
+
+            # <heading>
+
+            <intro line>
+
+            ## <peer_id> (<display_name>)
+            - key1
+            - key2
+
+        Empty when actor is None / standalone nanobot / no peers.
+        """
+        client = self._principal_client(actor)
+        if client is None or client is self._CLIENT_FAILED:
+            return ""
+        try:
+            from familia.principals import get_registry  # noqa: PLC0415
+            from familia.acl.peers import is_family_member, is_peer  # noqa: PLC0415
+            from familia.bootstrap import make_reachable_tags_getter  # noqa: PLC0415
+        except ImportError:
+            return ""
+
+        if relation == "peer":
+            predicate = is_peer
+        elif relation == "family":
+            predicate = is_family_member
+        else:
+            return ""
+
+        try:
+            registry = get_registry()
+        except Exception:  # noqa: BLE001
+            return ""
+
+        # Reachable tag-set for the viewing actor. Used to drop entries
+        # whose record-tags don't intersect — surfacing a name we'd
+        # never let them read is a leak even without value disclosure.
+        # Computed lazily and only when shared-index entries actually
+        # carry tags (legacy entries with empty tags survive
+        # unfiltered, matching pre-tag-ACL behaviour).
+        reachable_tags: set[str] | None = None
+        reachable_getter = None
+
+        sections: list[str] = []
+        for pid in registry.ids:
+            if pid == actor:
+                continue
+            try:
+                if not predicate(actor, pid):
+                    continue
+            except Exception:  # noqa: BLE001 — never break a turn over a probe
+                continue
+            raw = client.get_other(pid, suffix)
+            if not raw or not raw.strip():
+                continue
+            try:
+                import json as _json  # noqa: PLC0415
+                entries = _json.loads(raw)
+            except ValueError:
+                continue
+            if not isinstance(entries, list):
+                continue
+            # Newest first; accept both legacy bare-string and
+            # current ``{"name", "tags"}`` formats. Records carrying
+            # tags are filtered against the actor's reachable set.
+            filtered: list[str] = []
+            for entry in reversed(entries):
+                if isinstance(entry, str) and entry:
+                    filtered.append(entry)
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                name = entry.get("name")
+                if not isinstance(name, str) or not name:
+                    continue
+                rec_tags = [
+                    t for t in (entry.get("tags") or [])
+                    if isinstance(t, str) and t
+                ]
+                if not rec_tags:
+                    # Untagged record — readable to anyone with
+                    # shared:* memX scope (which every principal has).
+                    filtered.append(name)
+                    continue
+                if reachable_getter is None:
+                    try:
+                        reachable_getter = make_reachable_tags_getter()
+                    except Exception:  # noqa: BLE001 — fail-closed
+                        # Without a tag-set we can't decide; drop the
+                        # tagged entry rather than leak its name.
+                        continue
+                if reachable_tags is None:
+                    try:
+                        reachable_tags = reachable_getter(actor) or set()
+                    except Exception:  # noqa: BLE001
+                        reachable_tags = set()
+                if reachable_tags & set(rec_tags):
+                    filtered.append(name)
+                # else: tag-ACL would deny on read; drop name from index.
+            if not filtered:
+                continue
+            filtered = filtered[: self._PEER_INDEX_MAX_KEYS_PER_PEER]
+            peer_principal = registry.get(pid)
+            display = (
+                peer_principal.display_name
+                if peer_principal and peer_principal.display_name
+                else pid
+            )
+            bullets = "\n".join(f"- {n}" for n in filtered)
+            sections.append(f"## {pid} ({display})\n{bullets}")
+
+        if not sections:
+            return ""
+
+        if scope_label == "shared":
+            intro = (
+                "Custom ``shared:`` keys written by other family "
+                "members. Read with ``memory_get`` "
+                "``scope='shared'`` and the bare key name. Tag-ACL "
+                "still gates per-record visibility — a listed key may "
+                "return empty if the per-record tags exclude you."
+            )
+        else:
+            intro = (
+                "Custom ``private:`` keys of your peers. Read with the "
+                "operator's CLI or admin tooling — the chat-side "
+                "``memory_get`` only reads your own private namespace. "
+                "Listed here so you can ask the operator or use the "
+                "key names as topic anchors in conversation."
+            )
+
+        body = "\n\n".join(sections)
+        return f"# {heading}\n\n{intro}\n\n{body}"
 
     # Hard cap on bytes per stitched peer USER. 4 KiB is enough for a
     # plausible self-description; bigger means somebody's stuffing the

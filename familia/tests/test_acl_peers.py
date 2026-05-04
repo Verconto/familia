@@ -106,3 +106,52 @@ def test_cache_busts_on_role_flip(stub_graph_and_registry):
         child_ids=["b"],
     )
     assert peers.is_peer("a", "b") is False
+
+
+# ---- is_family_member -----------------------------------------------------
+#
+# Looser than is_peer: any edge in family.graph counts (including
+# parent_of / guardian_of) AND children are NOT excluded — used for
+# shared-key index visibility where a daughter must see her mother's
+# listings even though she's not a private-memory peer.
+
+def test_family_member_via_spouse_edge(stub_graph_and_registry):
+    stub_graph_and_registry(edges=[{"from": "a", "to": "b", "rel": "spouse_of"}])
+    assert peers.is_family_member("a", "b") is True
+    assert peers.is_family_member("b", "a") is True
+
+
+def test_family_member_via_parent_of(stub_graph_and_registry):
+    """parent_of doesn't grant peer status, but DOES grant family membership."""
+    stub_graph_and_registry(
+        edges=[{"from": "parent", "to": "child", "rel": "parent_of"}],
+    )
+    assert peers.is_peer("parent", "child") is False  # asymmetric stays
+    assert peers.is_family_member("parent", "child") is True
+    assert peers.is_family_member("child", "parent") is True
+
+
+def test_family_member_includes_child_role(stub_graph_and_registry):
+    """The role:child exclusion in is_peer must NOT apply to is_family_member.
+    User requirement: даже дочь должна видеть shared-индекс матери."""
+    stub_graph_and_registry(
+        edges=[{"from": "mom", "to": "daughter", "rel": "guardian_of"}],
+        child_ids=["daughter"],
+    )
+    assert peers.is_peer("daughter", "mom") is False  # role-blocked
+    assert peers.is_family_member("daughter", "mom") is True
+    assert peers.is_family_member("mom", "daughter") is True
+
+
+def test_family_member_no_edge(stub_graph_and_registry):
+    stub_graph_and_registry(
+        edges=[{"from": "a", "to": "b", "rel": "spouse_of"}],
+    )
+    assert peers.is_family_member("a", "stranger") is False
+
+
+def test_family_member_self_and_none(stub_graph_and_registry):
+    stub_graph_and_registry(edges=[])
+    assert peers.is_family_member("a", "a") is False
+    assert peers.is_family_member(None, "a") is False
+    assert peers.is_family_member("a", "") is False

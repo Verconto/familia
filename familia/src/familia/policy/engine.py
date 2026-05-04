@@ -164,17 +164,26 @@ def _match_actor(patterns: list[str], actor: str | None) -> bool:
     and the named principal in the family graph and neither side has
     ``role: child``.
 
+    ``@family_of:<id>`` matches the looser "any edge in the family
+    graph" relation (:func:`familia.acl.peers.is_family_member`).
+    Use it for visibility-only rules (e.g. surfacing shared-key
+    indexes) where a child should see their parent's listings even
+    though they are not peers for private-memory purposes.
+
     Negation ``!@…`` is supported for both. Id-based patterns still go
     through :func:`_match_any`.
     """
     id_patterns: list[str] = []
-    # Each predicate is (negate, kind, arg). ``kind`` is "role" or "peer_of".
+    # Each predicate is (negate, kind, arg). ``kind`` is "role",
+    # "peer_of", "family_of", or "principal".
     predicates: list[tuple[bool, str, str]] = []
     for raw in patterns:
         negate = raw.startswith("!")
         body = raw[1:] if negate else raw
         if body.startswith("@peer_of:"):
             predicates.append((negate, "peer_of", body[len("@peer_of:"):]))
+        elif body.startswith("@family_of:"):
+            predicates.append((negate, "family_of", body[len("@family_of:"):]))
         elif body == "@principal":
             # Any actor that resolves to a registered principal id —
             # the "I am someone the system knows" cohort. Lets us
@@ -209,6 +218,9 @@ def _match_actor(patterns: list[str], actor: str | None) -> bool:
             hit = arg in _roles()
         elif kind == "peer_of":
             hit = is_peer(actor, arg)
+        elif kind == "family_of":
+            from familia.acl.peers import is_family_member  # noqa: PLC0415
+            hit = is_family_member(actor, arg)
         elif kind == "principal":
             if not actor:
                 hit = False

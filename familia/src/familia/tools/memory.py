@@ -505,20 +505,33 @@ class MemorySetTool(Tool):
         # also creates a write-loop risk for ``value:*_index``.
         if not _is_reserved_value_key(key):
             if scope == "shared":
+                # Pass tags so the cross-principal peer-index surface
+                # (context.py) can hide entries whose tags don't
+                # intersect with the viewing actor's reachable set.
+                # Without this filter, names like "secret_journal"
+                # would leak to every family member who has any edge
+                # in the family graph, even when tag-ACL would deny
+                # the actual read.
                 await _append_to_index(
                     actor_id=actor_id,
                     api_key=api_key,
                     base_url=self._base_url_override or memx_base_url(),
                     index_suffix="value:shared_index",
                     written_key=key,
+                    tags=sorted(tag_set) if tag_set else [],
                 )
             elif scope == "private":
+                # Private index isn't surfaced cross-principal at the
+                # same fidelity (peer-edge gating is the only check
+                # there — children/non-peers see nothing). Tag-list
+                # carried for symmetry; no consumer reads it today.
                 await _append_to_index(
                     actor_id=actor_id,
                     api_key=api_key,
                     base_url=self._base_url_override or memx_base_url(),
                     index_suffix="value:private_index",
                     written_key=key,
+                    tags=sorted(tag_set) if tag_set else [],
                 )
         if tag_set:
             tag_str = ", ".join(sorted(tag_set))
@@ -560,16 +573,28 @@ async def _append_to_index(
     base_url: str,
     index_suffix: str,
     written_key: str,
+    tags: list[str] | None = None,
 ) -> None:
     """Append ``written_key`` to ``private:<actor_id>:<index_suffix>``.
 
-    The index is a JSON list of bare key names. Idempotent (existing
-    entries are reordered MRU rather than duplicated). Best-effort:
-    GET/POST failures are logged at WARNING and swallowed. Used by
-    both shared-scope and private-scope writes; the index suffix
-    distinguishes the two.
+    Two encodings are accepted on read for backward compatibility:
+
+    * legacy: ``["a", "b", ...]`` — bare key names, no tag info.
+    * current: ``[{"name": "a", "tags": ["x", "y"]}, ...]`` — name +
+      its record's tag list at write-time. Used by the cross-principal
+      peer-index surface so the context builder can hide entries whose
+      tags don't intersect with the viewing actor's reachable tag-set
+      ("don't surface a name we wouldn't let them read").
+
+    Writes always emit the dict form. ``tags=None`` becomes ``[]`` —
+    legacy behaviour: no tag-filter on the surface side.
+
+    Idempotent on ``written_key`` (existing entries are removed and
+    re-appended at the tail so MRU eviction keeps the freshest set).
+    Best-effort: GET/POST failures are logged at WARNING and swallowed.
     """
     index_full = f"private:{actor_id}:{index_suffix}"
+    tag_list = sorted({t for t in (tags or []) if isinstance(t, str) and t})
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             existing = await client.get(
@@ -577,7 +602,7 @@ async def _append_to_index(
                 headers={"x-api-key": api_key},
                 params={"key": index_full},
             )
-            keys: list[str] = []
+            entries: list[dict[str, Any]] = []
             if existing.status_code == 200:
                 try:
                     payload = existing.json()
@@ -591,20 +616,29 @@ async def _append_to_index(
                 if isinstance(value, str) and value:
                     try:
                         decoded = json.loads(value)
-                        if isinstance(decoded, list):
-                            keys = [k for k in decoded if isinstance(k, str)]
                     except json.JSONDecodeError:
                         # Legacy / corrupted — start fresh; old content
                         # will be lost but that's strictly better than
                         # propagating bad JSON forward.
-                        keys = []
-            if written_key in keys:
-                # Bring it to the end so MRU survives the cap eviction.
-                keys.remove(written_key)
-            keys.append(written_key)
-            if len(keys) > _SHARED_INDEX_MAX_ENTRIES:
-                keys = keys[-_SHARED_INDEX_MAX_ENTRIES:]
-            new_value = json.dumps(keys, ensure_ascii=False)
+                        decoded = []
+                    if isinstance(decoded, list):
+                        for item in decoded:
+                            if isinstance(item, str) and item:
+                                entries.append({"name": item, "tags": []})
+                            elif isinstance(item, dict) and isinstance(item.get("name"), str):
+                                entries.append({
+                                    "name": item["name"],
+                                    "tags": [
+                                        t for t in (item.get("tags") or [])
+                                        if isinstance(t, str) and t
+                                    ],
+                                })
+            # Drop any prior entry with the same name (MRU re-append).
+            entries = [e for e in entries if e.get("name") != written_key]
+            entries.append({"name": written_key, "tags": tag_list})
+            if len(entries) > _SHARED_INDEX_MAX_ENTRIES:
+                entries = entries[-_SHARED_INDEX_MAX_ENTRIES:]
+            new_value = json.dumps(entries, ensure_ascii=False)
             await client.post(
                 f"{base_url}/set",
                 headers={"x-api-key": api_key},

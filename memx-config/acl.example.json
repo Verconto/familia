@@ -1,21 +1,32 @@
 {
   "_comment": "Per-actor memX API keys. Copy to acl.json and replace placeholder keys with real secrets. Scope syntax: fnmatch glob, matches BOTH read and write (memX local ACL does not split permissions).",
 
+  "_index_visibility_comment": "The narrow ``private:*:value:shared_index`` and ``private:*:value:private_index`` and ``private:*:value:user_profile`` grants on every principal key let the context-builder surface peer key-name listings and stitch peer USER profiles. The relation-gating (which peer counts) lives in the policy engine + nanobot/agent/context.py — these grants are the lower memX layer that actually allows the cross-principal HTTP read.",
+
   "owner_key": [
     "shared:*",
     "private:owner:*",
-    "pair:owner_*:*"
+    "pair:owner_*:*",
+    "private:*:value:shared_index",
+    "private:*:value:private_index",
+    "private:*:value:user_profile"
   ],
   "partner_key": [
     "shared:*",
     "private:partner:*",
     "pair:owner_partner:*",
-    "pair:partner_*:*"
+    "pair:partner_*:*",
+    "private:*:value:shared_index",
+    "private:*:value:private_index",
+    "private:*:value:user_profile"
   ],
   "child_key": [
     "shared:*",
     "private:child:*",
-    "pair:*_child:*"
+    "pair:*_child:*",
+    "private:*:value:shared_index",
+    "private:*:value:private_index",
+    "private:*:value:user_profile"
   ],
 
   "_agent_comment": "agent_self_key — agent's own scratchpad (shared memory only). dream_consolidator_key — cross-scope read/write for nightly consolidation, registered only on dream-agent.",

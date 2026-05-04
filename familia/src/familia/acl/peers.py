@@ -44,9 +44,11 @@ PEER_RELATIONS: frozenset[str] = frozenset({"spouse_of", "guardian_of"})
 PROBE_TTL_MS = 5_000
 
 _lock = threading.Lock()
-# Per-(actor, target) decision cache, keyed by ``probe.updated_at_ms``
-# so any graph edit invalidates entries automatically.
-_cache: dict[tuple[str, str], tuple[int, bool]] = {}
+# Per-(kind, actor, target) decision cache, keyed by
+# ``probe.updated_at_ms`` so any graph edit invalidates entries
+# automatically. ``kind`` distinguishes the two predicates that share
+# this cache: ``"peer"`` (is_peer) and ``"family"`` (is_family_member).
+_cache: dict[tuple[str, str, str], tuple[int, bool]] = {}
 # Most recent probe + the wall-clock time it was loaded; reused while
 # fresh to avoid repeating the HTTP call.
 _probe_state: dict[str, object] = {"probe": None, "loaded_at_ms": 0}
@@ -142,7 +144,7 @@ def is_peer(actor: str | None, target: str) -> bool:
     if actor in probe.children or target in probe.children:
         return False
 
-    cache_key = (actor, target)
+    cache_key = ("peer", actor, target)
     with _lock:
         cached = _cache.get(cache_key)
         if cached is not None and cached[0] == probe.updated_at_ms:
@@ -152,6 +154,41 @@ def is_peer(actor: str | None, target: str) -> bool:
     for f, t, rel in probe.edges:
         if rel not in PEER_RELATIONS:
             continue
+        if (f == actor and t == target) or (f == target and t == actor):
+            found = True
+            break
+
+    with _lock:
+        _cache[cache_key] = (probe.updated_at_ms, found)
+    return found
+
+
+def is_family_member(actor: str | None, target: str) -> bool:
+    """True iff ``actor`` and ``target`` share ANY edge in the family graph.
+
+    Looser than :func:`is_peer`: any ``rel`` counts (``spouse_of``,
+    ``guardian_of``, ``parent_of``, ``sibling_of``, …), and the
+    ``role: child`` exclusion is NOT applied. Used by the context
+    builder to surface ``shared:`` keys across family ties — a child
+    needs to see their mother's shared-index entries even though the
+    child is *not* a peer for private-memory purposes.
+
+    Self-checks return False; ``actor=None`` always returns False.
+    Cached the same way as :func:`is_peer`, keyed on the graph's
+    ``updated_at_ms`` so a graph edit busts entries automatically.
+    """
+    if not actor or not target or actor == target:
+        return False
+
+    probe = _get_probe()
+    cache_key = ("family", actor, target)
+    with _lock:
+        cached = _cache.get(cache_key)
+        if cached is not None and cached[0] == probe.updated_at_ms:
+            return cached[1]
+
+    found = False
+    for f, t, _rel in probe.edges:
         if (f == actor and t == target) or (f == target and t == actor):
             found = True
             break

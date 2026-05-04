@@ -130,6 +130,39 @@ rules:
     to_chat: "shared:*"
     decision: allow
 
+  # === Cross-principal index visibility =====================================
+  #
+  # Каждый принципал должен видеть в своём system-prompt'е имена ключей,
+  # которые писали его пиры (для shared) и его близкие пиры (для private).
+  # Тонкая логика «кто кому пир» решается в context-builder'е через
+  # is_family_member / is_peer; этот слой — только coarse-allow.
+  #
+  # Reads of ``private:*:value:shared_index`` — кто угодно зарегистрированный.
+  # Реальный фильтр «показывать ли имя» делает context-builder через
+  # is_family_member (любая edge в family.graph). Tag-ACL на per-record
+  # уровне продолжает действовать на самом memory_get.
+  - name: "principal: read peers' shared_index"
+    action: memory.read
+    actor: "@principal"
+    to_chat: "private:*:value:shared_index"
+    decision: allow
+
+  # Reads of ``private:*:value:private_index`` и ``value:user_profile`` —
+  # только peer'ам (spouse_of / guardian_of, без role:child).  Существующие
+  # `peer-of-X` правила выше уже это покрывают — здесь только закрепляем
+  # дефолт для шаблона и явно добавляем USER stitching.
+  - name: "principal: read peers' private_index (peer-edge only)"
+    action: memory.read
+    actor: "@peer_of:owner"
+    to_chat: "private:owner:value:private_index"
+    decision: allow
+
+  - name: "principal: read peers' user_profile (peer-edge only)"
+    action: memory.read
+    actor: "@peer_of:owner"
+    to_chat: "private:owner:value:user_profile"
+    decision: allow
+
   # --- Admin роль: управление динамическим admin-грантом + глобальной TZ ---
   #
   # role.admin.grant/revoke/list/set_tz доступны только эффективным

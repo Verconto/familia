@@ -107,3 +107,44 @@ def test_peer_of_matcher_uses_graph(monkeypatch):
     assert eng.evaluate(
         PolicyContext(action="memory.read", actor="stranger", to_chat="private:owner:diary")
     ).decision is Decision.DENY
+
+
+def test_family_of_matcher_uses_graph(monkeypatch):
+    """``@family_of:<id>`` resolves through ``acl.peers.is_family_member``.
+
+    Looser than @peer_of: a child still matches @family_of even though
+    they're not a private-memory peer.
+    """
+    rule = _rule(
+        action="memory.read",
+        actor="@family_of:owner",
+        to_chat="private:owner:value:shared_index",
+    )
+    eng = _engine_with(rule)
+
+    from familia.acl import peers as peers_mod
+
+    monkeypatch.setattr(
+        peers_mod,
+        "is_family_member",
+        lambda actor, target: actor in {"spouse", "daughter"},
+    )
+
+    assert eng.evaluate(
+        PolicyContext(
+            action="memory.read", actor="spouse",
+            to_chat="private:owner:value:shared_index",
+        )
+    ).decision is Decision.ALLOW
+    assert eng.evaluate(
+        PolicyContext(
+            action="memory.read", actor="daughter",
+            to_chat="private:owner:value:shared_index",
+        )
+    ).decision is Decision.ALLOW
+    assert eng.evaluate(
+        PolicyContext(
+            action="memory.read", actor="stranger",
+            to_chat="private:owner:value:shared_index",
+        )
+    ).decision is Decision.DENY
