@@ -261,7 +261,7 @@ async def test_manager_propagates_openai_transcription_api_base_to_channels():
 
 
 @pytest.mark.asyncio
-async def test_base_channel_passes_api_base_to_openai_transcription_provider():
+async def test_base_channel_passes_api_base_to_openai_transcription_provider(tmp_path):
     """BaseChannel.transcribe_audio must forward transcription_api_base to OpenAI."""
     from nanobot.providers import transcription as transcription_mod
 
@@ -273,15 +273,25 @@ async def test_base_channel_passes_api_base_to_openai_transcription_provider():
     captured: dict[str, object] = {}
 
     class _StubOpenAI:
-        def __init__(self, api_key=None, api_base=None):
+        def __init__(self, api_key=None, api_base=None, language=None, **kwargs):
+            # Accept extra kwargs so the stub doesn't break when the
+            # real provider grows new parameters (e.g. ``language``
+            # was added after this test was written).
             captured["api_key"] = api_key
             captured["api_base"] = api_base
 
         async def transcribe(self, file_path):
             return "ok"
 
+    # Use a per-test path under ``tmp_path`` so the next-to-the-audio
+    # ``.wav.txt`` transcript cache (produced by transcribe_audio on
+    # success) is isolated and never collides with leftovers from
+    # other tests run in the same shared /tmp.
+    audio_path = tmp_path / "does-not-matter.wav"
+    audio_path.write_bytes(b"\x00")
+
     with patch.object(transcription_mod, "OpenAITranscriptionProvider", _StubOpenAI):
-        result = await channel.transcribe_audio("/tmp/does-not-matter.wav")
+        result = await channel.transcribe_audio(str(audio_path))
 
     assert result == "ok"
     assert captured["api_key"] == "k"

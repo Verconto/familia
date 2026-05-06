@@ -189,10 +189,11 @@ async def test_start_creates_separate_pools_with_proxy(monkeypatch) -> None:
     assert builder.request_value is api_req
     assert builder.get_updates_request_value is poll_req
     assert callable(app.updater.start_polling_kwargs["error_callback"])
-    assert any(cmd.command == "status" for cmd in app.bot.commands)
-    assert any(cmd.command == "dream" for cmd in app.bot.commands)
-    assert any(cmd.command == "dream_log" for cmd in app.bot.commands)
-    assert any(cmd.command == "dream_restore" for cmd in app.bot.commands)
+    # Slash-command menu is intentionally empty after the router was
+    # removed — the bot is natural-language only. ``start()`` calls
+    # ``set_my_commands([])`` to wipe whatever BotFather might have
+    # cached from older builds.
+    assert app.bot.commands == []
 
 
 @pytest.mark.asyncio
@@ -1189,87 +1190,10 @@ async def test_on_message_reply_to_caption_and_media(monkeypatch, tmp_path) -> N
     assert "cat_fid" in handled[0]["media"][0]
 
 
-@pytest.mark.asyncio
-async def test_forward_command_does_not_inject_reply_context() -> None:
-    """Slash commands forwarded via _forward_command must not include reply context."""
-    channel = TelegramChannel(
-        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"], group_policy="open"),
-        MessageBus(),
-    )
-    channel._app = _FakeApp(lambda: None)
-    handled = []
-    async def capture_handle(**kwargs) -> None:
-        handled.append(kwargs)
-    channel._handle_message = capture_handle
-
-    reply = SimpleNamespace(text="some old message", message_id=2, from_user=SimpleNamespace(id=1))
-    update = _make_telegram_update(text="/new", reply_to_message=reply)
-    await channel._forward_command(update, None)
-
-    assert len(handled) == 1
-    assert handled[0]["content"] == "/new"
-
-
-@pytest.mark.asyncio
-async def test_forward_command_preserves_dream_log_args_and_strips_bot_suffix() -> None:
-    channel = TelegramChannel(
-        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"], group_policy="open"),
-        MessageBus(),
-    )
-    channel._app = _FakeApp(lambda: None)
-    handled = []
-
-    async def capture_handle(**kwargs) -> None:
-        handled.append(kwargs)
-
-    channel._handle_message = capture_handle
-    update = _make_telegram_update(text="/dream-log@nanobot_test deadbeef", reply_to_message=None)
-
-    await channel._forward_command(update, None)
-
-    assert len(handled) == 1
-    assert handled[0]["content"] == "/dream-log deadbeef"
-
-
-@pytest.mark.asyncio
-async def test_forward_command_normalizes_telegram_safe_dream_aliases() -> None:
-    channel = TelegramChannel(
-        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"], group_policy="open"),
-        MessageBus(),
-    )
-    channel._app = _FakeApp(lambda: None)
-    handled = []
-
-    async def capture_handle(**kwargs) -> None:
-        handled.append(kwargs)
-
-    channel._handle_message = capture_handle
-    update = _make_telegram_update(text="/dream_restore@nanobot_test deadbeef", reply_to_message=None)
-
-    await channel._forward_command(update, None)
-
-    assert len(handled) == 1
-    assert handled[0]["content"] == "/dream-restore deadbeef"
-
-
-@pytest.mark.asyncio
-async def test_on_help_includes_restart_command() -> None:
-    channel = TelegramChannel(
-        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"], group_policy="open"),
-        MessageBus(),
-    )
-    update = _make_telegram_update(text="/help", chat_type="private")
-    update.message.reply_text = AsyncMock()
-
-    await channel._on_help(update, None)
-
-    update.message.reply_text.assert_awaited_once()
-    help_text = update.message.reply_text.await_args.args[0]
-    assert "/restart" in help_text
-    assert "/status" in help_text
-    assert "/dream" in help_text
-    assert "/dream-log" in help_text
-    assert "/dream-restore" in help_text
+# Slash-command tests (test_forward_command_*, test_on_help_*) removed
+# alongside the slash-command router. The TG adapter no longer has
+# ``_forward_command`` / ``_on_help`` / ``_normalize_telegram_command``;
+# every Telegram update routes straight to ``_on_message``.
 
 
 @pytest.mark.asyncio

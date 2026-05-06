@@ -16,7 +16,6 @@ from nanobot.channels.discord import (
     DiscordChannel,
     DiscordConfig,
 )
-from nanobot.command.builtin import build_help_text
 
 
 # Minimal Discord client test double used to control startup/readiness behavior.
@@ -571,98 +570,10 @@ async def test_send_delta_stream_end_splits_oversized_reply(monkeypatch) -> None
     assert owner._stream_bufs == {}
 
 
-@pytest.mark.asyncio
-async def test_slash_new_forwards_when_user_is_allowlisted() -> None:
-    channel = DiscordChannel(DiscordConfig(enabled=True, allow_from=["123"]), MessageBus())
-    handled: list[dict] = []
-
-    async def capture_handle(**kwargs) -> None:
-        handled.append(kwargs)
-
-    channel._handle_message = capture_handle  # type: ignore[method-assign]
-    client = DiscordBotClient(channel, intents=discord.Intents.none())
-    interaction = _make_interaction(user_id=123, channel_id=456, interaction_id=321)
-
-    new_cmd = client.tree.get_command("new")
-    assert new_cmd is not None
-    await new_cmd.callback(interaction)
-
-    assert interaction.response.messages == [{"content": "Processing /new...", "ephemeral": True}]
-    assert len(handled) == 1
-    assert handled[0]["content"] == "/new"
-    assert handled[0]["sender_id"] == "123"
-    assert handled[0]["chat_id"] == "456"
-    assert handled[0]["metadata"]["interaction_id"] == "321"
-    assert handled[0]["metadata"]["is_slash_command"] is True
-
-
-@pytest.mark.asyncio
-async def test_slash_new_is_blocked_for_disallowed_user() -> None:
-    channel = DiscordChannel(DiscordConfig(enabled=True, allow_from=["999"]), MessageBus())
-    handled: list[dict] = []
-
-    async def capture_handle(**kwargs) -> None:
-        handled.append(kwargs)
-
-    channel._handle_message = capture_handle  # type: ignore[method-assign]
-    client = DiscordBotClient(channel, intents=discord.Intents.none())
-    interaction = _make_interaction(user_id=123, channel_id=456)
-
-    new_cmd = client.tree.get_command("new")
-    assert new_cmd is not None
-    await new_cmd.callback(interaction)
-
-    assert interaction.response.messages == [
-        {"content": "You are not allowed to use this bot.", "ephemeral": True}
-    ]
-    assert handled == []
-
-
-@pytest.mark.parametrize("slash_name", ["stop", "restart", "status"])
-@pytest.mark.asyncio
-async def test_slash_commands_forward_via_handle_message(slash_name: str) -> None:
-    channel = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
-    handled: list[dict] = []
-
-    async def capture_handle(**kwargs) -> None:
-        handled.append(kwargs)
-
-    channel._handle_message = capture_handle  # type: ignore[method-assign]
-    client = DiscordBotClient(channel, intents=discord.Intents.none())
-    interaction = _make_interaction()
-    interaction.command.qualified_name = slash_name
-
-    cmd = client.tree.get_command(slash_name)
-    assert cmd is not None
-    await cmd.callback(interaction)
-
-    assert interaction.response.messages == [
-        {"content": f"Processing /{slash_name}...", "ephemeral": True}
-    ]
-    assert len(handled) == 1
-    assert handled[0]["content"] == f"/{slash_name}"
-    assert handled[0]["metadata"]["is_slash_command"] is True
-
-
-@pytest.mark.asyncio
-async def test_slash_help_returns_ephemeral_help_text() -> None:
-    channel = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
-    handled: list[dict] = []
-
-    async def capture_handle(**kwargs) -> None:
-        handled.append(kwargs)
-
-    channel._handle_message = capture_handle  # type: ignore[method-assign]
-    client = DiscordBotClient(channel, intents=discord.Intents.none())
-    interaction = _make_interaction()
-    interaction.command.qualified_name = "help"
-
-    help_cmd = client.tree.get_command("help")
-    assert help_cmd is not None
-    await help_cmd.callback(interaction)
-
-    assert interaction.response.messages == [{"content": build_help_text(), "ephemeral": True}]
-    assert handled == []
+# Discord slash-command tests removed alongside the slash-command
+# router. The Discord adapter no longer registers ``/new`` ``/stop``
+# ``/restart`` ``/status`` ``/help`` app-commands; natural-language
+# input via on_message is the only routing surface.
 
 
 @pytest.mark.asyncio

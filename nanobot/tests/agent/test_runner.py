@@ -948,8 +948,13 @@ async def test_llm_error_not_appended_to_session_messages():
         max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
     ))
 
+    from nanobot.agent.runner import _DEFAULT_ERROR_MESSAGE
+
     assert result.stop_reason == "error"
-    assert result.final_content == "429 rate limit exceeded"
+    # User-facing final_content is the friendly fallback, never the raw
+    # provider text. Raw sits in result.error for audit / ops.
+    assert result.final_content == _DEFAULT_ERROR_MESSAGE
+    assert result.error == "429 rate limit exceeded"
     assistant_msgs = [m for m in result.messages if m.get("role") == "assistant"]
     assert all("429" not in (m.get("content") or "") for m in assistant_msgs), \
         "Error content should not appear in session messages"
@@ -976,7 +981,12 @@ async def test_streamed_flag_not_set_on_llm_error(tmp_path):
     loop.tools.get_definitions = MagicMock(return_value=[])
 
     msg = InboundMessage(
+        # ``actor`` set so the pending-principal gate (familia/pending
+        # auto-approve / pending-store flow) doesn't intercept the
+        # message and return the templated welcome reply before we
+        # ever reach the LLM error path under test.
         channel="feishu", sender_id="u1", chat_id="c1", content="hi",
+        actor="test_actor",
     )
     result = await loop._process_message(
         msg,
@@ -984,8 +994,13 @@ async def test_streamed_flag_not_set_on_llm_error(tmp_path):
         on_stream_end=AsyncMock(),
     )
 
+    from nanobot.agent.runner import _DEFAULT_ERROR_MESSAGE
+
     assert result is not None
-    assert "503" in result.content
+    # User-facing content is the friendly fallback; raw "503 …" stays
+    # out of the chat (still in audit / gateway log).
+    assert "503" not in result.content
+    assert result.content == _DEFAULT_ERROR_MESSAGE
     assert not result.metadata.get("_streamed"), \
         "_streamed must not be set when stop_reason is error"
 
@@ -1008,11 +1023,13 @@ async def test_next_turn_after_llm_error_keeps_turn_boundary(tmp_path):
     loop.tools.get_definitions = MagicMock(return_value=[])
     loop.consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=False)  # type: ignore[method-assign]
 
+    from nanobot.agent.runner import _DEFAULT_ERROR_MESSAGE
+
     first = await loop._process_message(
         InboundMessage(channel="cli", sender_id="user", chat_id="test", content="first question")
     )
     assert first is not None
-    assert first.content == "429 rate limit exceeded"
+    assert first.content == _DEFAULT_ERROR_MESSAGE
 
     session = loop.sessions.get_or_create("cli:test")
     assert [

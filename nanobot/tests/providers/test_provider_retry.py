@@ -67,10 +67,14 @@ async def test_chat_with_retry_does_not_retry_non_transient_error(monkeypatch) -
 
 @pytest.mark.asyncio
 async def test_chat_with_retry_returns_final_error_after_retries(monkeypatch) -> None:
+    # Six-retry budget: 1 initial + 6 retries = 7 calls before giving up.
     provider = ScriptedProvider([
-        LLMResponse(content="429 rate limit a", finish_reason="error"),
-        LLMResponse(content="429 rate limit b", finish_reason="error"),
-        LLMResponse(content="429 rate limit c", finish_reason="error"),
+        LLMResponse(content="429 rate limit 1", finish_reason="error"),
+        LLMResponse(content="429 rate limit 2", finish_reason="error"),
+        LLMResponse(content="429 rate limit 3", finish_reason="error"),
+        LLMResponse(content="429 rate limit 4", finish_reason="error"),
+        LLMResponse(content="429 rate limit 5", finish_reason="error"),
+        LLMResponse(content="429 rate limit 6", finish_reason="error"),
         LLMResponse(content="503 final server error", finish_reason="error"),
     ])
     delays: list[int] = []
@@ -83,16 +87,19 @@ async def test_chat_with_retry_returns_final_error_after_retries(monkeypatch) ->
     response = await provider.chat_with_retry(messages=[{"role": "user", "content": "hello"}])
 
     assert response.content == "503 final server error"
-    assert provider.calls == 4
-    assert delays == [1, 2, 4]
+    assert provider.calls == 7
+    assert delays == [1, 2, 4, 8, 15, 30]
 
 
 @pytest.mark.asyncio
 async def test_chat_with_retry_emits_terminal_progress_when_standard_retries_exhaust(monkeypatch) -> None:
     provider = ScriptedProvider([
-        LLMResponse(content="429 rate limit a", finish_reason="error"),
-        LLMResponse(content="429 rate limit b", finish_reason="error"),
-        LLMResponse(content="429 rate limit c", finish_reason="error"),
+        LLMResponse(content="429 rate limit 1", finish_reason="error"),
+        LLMResponse(content="429 rate limit 2", finish_reason="error"),
+        LLMResponse(content="429 rate limit 3", finish_reason="error"),
+        LLMResponse(content="429 rate limit 4", finish_reason="error"),
+        LLMResponse(content="429 rate limit 5", finish_reason="error"),
+        LLMResponse(content="429 rate limit 6", finish_reason="error"),
         LLMResponse(content="503 final server error", finish_reason="error"),
     ])
     progress: list[str] = []
@@ -111,7 +118,7 @@ async def test_chat_with_retry_emits_terminal_progress_when_standard_retries_exh
     )
 
     assert response.content == "503 final server error"
-    assert progress[-1] == "Model request failed after 4 retries, giving up."
+    assert progress[-1] == "Model request failed after 7 retries, giving up."
 
 
 @pytest.mark.asyncio
@@ -495,7 +502,10 @@ async def test_persistent_retry_aborts_after_ten_identical_transient_errors(monk
     assert response.finish_reason == "error"
     assert response.content == "429 rate limit"
     assert provider.calls == 10
-    assert delays == [1, 2, 4, 4, 4, 4, 4, 4, 4]
+    # Six-stage backoff exhausted, then persistent plateau at last
+    # value (30s) below the persistent cap (60s). 10 calls = 9 sleeps
+    # between them.
+    assert delays == [1, 2, 4, 8, 15, 30, 30, 30, 30]
 
 
 @pytest.mark.asyncio

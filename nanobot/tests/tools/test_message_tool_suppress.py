@@ -42,7 +42,7 @@ class TestMessageToolSuppressLogic:
         if isinstance(mt, MessageTool):
             mt.set_send_callback(AsyncMock(side_effect=lambda m: sent.append(m)))
 
-        msg = InboundMessage(channel="feishu", sender_id="user1", chat_id="chat123", content="Send")
+        msg = InboundMessage(channel="feishu", sender_id="user1", chat_id="chat123", content="Send", actor="test_actor")
         result = await loop._process_message(msg)
 
         assert len(sent) == 1
@@ -67,7 +67,7 @@ class TestMessageToolSuppressLogic:
         if isinstance(mt, MessageTool):
             mt.set_send_callback(AsyncMock(side_effect=lambda m: sent.append(m)))
 
-        msg = InboundMessage(channel="feishu", sender_id="user1", chat_id="chat123", content="Send email")
+        msg = InboundMessage(channel="feishu", sender_id="user1", chat_id="chat123", content="Send email", actor="test_actor")
         result = await loop._process_message(msg)
 
         assert len(sent) == 1
@@ -81,7 +81,7 @@ class TestMessageToolSuppressLogic:
         loop.provider.chat_with_retry = AsyncMock(return_value=LLMResponse(content="Hello!", tool_calls=[]))
         loop.tools.get_definitions = MagicMock(return_value=[])
 
-        msg = InboundMessage(channel="feishu", sender_id="user1", chat_id="chat123", content="Hi")
+        msg = InboundMessage(channel="feishu", sender_id="user1", chat_id="chat123", content="Hi", actor="test_actor")
         result = await loop._process_message(msg)
 
         assert result is not None
@@ -113,10 +113,10 @@ class TestMessageToolSuppressLogic:
 
         pending_queue = asyncio.Queue()
         await pending_queue.put(
-            InboundMessage(channel="feishu", sender_id="user1", chat_id="chat123", content="follow-up")
+            InboundMessage(channel="feishu", sender_id="user1", chat_id="chat123", content="follow-up", actor="test_actor")
         )
 
-        msg = InboundMessage(channel="feishu", sender_id="user1", chat_id="chat123", content="Start")
+        msg = InboundMessage(channel="feishu", sender_id="user1", chat_id="chat123", content="Start", actor="test_actor")
         result = await loop._process_message(msg, pending_queue=pending_queue)
 
         assert len(sent) == 1

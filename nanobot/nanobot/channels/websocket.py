@@ -466,7 +466,17 @@ class WebSocketChannel(BaseChannel):
             client_id = _query_first(query, "client_id") or ""
             if len(client_id) > 128:
                 client_id = client_id[:128]
-            if self.should_drop_inbound(client_id):
+            # WebSocket handshake gates on ``allow_from`` directly,
+            # not via :meth:`BaseChannel.should_drop_inbound`. The
+            # latter is tuned for chat channels with a pending-
+            # principal flow (unknown senders go to the agent loop's
+            # gate so a human approver can let them in later). On a
+            # WebSocket there's no equivalent path: an unknown sender
+            # who completes the handshake just sits there with no UI
+            # affordance to be approved. We refuse the handshake
+            # outright unless ``allow_from`` lists them (``"*"`` is
+            # honoured as "any client_id").
+            if not self.is_allowed(client_id):
                 return connection.respond(403, "Forbidden")
             return self._authorize_websocket_handshake(connection, query)
 

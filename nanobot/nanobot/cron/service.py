@@ -12,7 +12,14 @@ from typing import Any, Callable, Coroutine, Literal
 from filelock import FileLock
 from loguru import logger
 
-from nanobot.cron.types import CronJob, CronJobState, CronPayload, CronRunRecord, CronSchedule, CronStore
+from nanobot.cron.types import (
+    CronJob,
+    CronJobState,
+    CronPayload,
+    CronRunRecord,
+    CronSchedule,
+    CronStore,
+)
 
 
 def _now_ms() -> int:
@@ -386,9 +393,53 @@ class CronService:
         created_by: str | None = None,
         tags: list[str] | None = None,
     ) -> CronJob:
-        """Add a new job."""
+        """Add a new job (idempotent on schedule + recipient + payload).
+
+        If an enabled job already exists with the same schedule
+        signature (cron expression / interval / one-shot timestamp +
+        timezone), the same delivery target (channel + to), and the
+        same message body, return that existing job instead of
+        creating a duplicate. Without this guard the LLM agent —
+        especially when re-prompted by the heartbeat tick reading
+        ``HEARTBEAT.md`` — happily creates a fresh cron with each
+        invocation, and one ``0 12 6-10 5 *`` reminder ends up firing
+        five times in parallel.
+        """
         _validate_schedule_for_add(schedule)
         now = _now_ms()
+
+        store = self._load_store() if self._running else None
+        if store is not None:
+            sched_sig = (
+                schedule.kind,
+                schedule.expr,
+                schedule.every_ms,
+                schedule.at_ms,
+                schedule.tz,
+            )
+            for existing in store.jobs:
+                if not existing.enabled:
+                    continue
+                if (
+                    existing.schedule.kind,
+                    existing.schedule.expr,
+                    existing.schedule.every_ms,
+                    existing.schedule.at_ms,
+                    existing.schedule.tz,
+                ) != sched_sig:
+                    continue
+                ep = existing.payload
+                if (
+                    ep.message == message
+                    and (ep.channel or "") == (channel or "")
+                    and (ep.to or "") == (to or "")
+                ):
+                    logger.info(
+                        "Cron: dedupe hit on add — returning existing job '{}' ({}) "
+                        "instead of creating a duplicate",
+                        existing.name, existing.id,
+                    )
+                    return existing
 
         job = CronJob(
             id=str(uuid.uuid4())[:8],

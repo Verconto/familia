@@ -35,7 +35,6 @@ from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.web import WebFetchTool, WebSearchTool
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
-from nanobot.command import CommandContext, CommandRouter, register_builtin_commands
 from nanobot.config.schema import AgentDefaults
 from nanobot.providers.base import LLMProvider
 from nanobot.session.manager import Session, SessionManager
@@ -269,8 +268,6 @@ class AgentLoop:
             self.tools.register(MyTool(loop=self, modify_allowed=_tc.my.allow_set))
         self._runtime_vars: dict[str, Any] = {}
         self._current_iteration: int = 0
-        self.commands = CommandRouter()
-        register_builtin_commands(self.commands)
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
@@ -536,13 +533,6 @@ class AgentLoop:
                 logger.warning("Error consuming inbound message: {}, continuing...", e)
                 continue
 
-            raw = msg.content.strip()
-            if self.commands.is_priority(raw):
-                ctx = CommandContext(msg=msg, session=None, key=msg.session_key, raw=raw, loop=self)
-                result = await self.commands.dispatch_priority(ctx)
-                if result:
-                    await self.bus.publish_outbound(result)
-                continue
             effective_key = self._effective_session_key(msg)
             # If this session already has an active pending queue (i.e. a task
             # is processing this session), route the message there for mid-turn
@@ -932,12 +922,6 @@ class AgentLoop:
 
         session, pending = self.auto_compact.prepare_session(session, key)
 
-        # Slash commands
-        raw = msg.content.strip()
-        ctx = CommandContext(msg=msg, session=session, key=key, raw=raw, loop=self)
-        if result := await self.commands.dispatch(ctx):
-            return result
-
         await self.consolidator.maybe_consolidate_by_tokens(
             session,
             session_summary=pending,
@@ -975,16 +959,20 @@ class AgentLoop:
             )
 
         async def _on_retry_wait(content: str) -> None:
-            meta = dict(msg.metadata or {})
-            meta["_retry_wait"] = True
-            await self.bus.publish_outbound(
-                OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content=content,
-                    metadata=meta,
-                )
-            )
+            # Old behaviour pushed the verbatim "Model request failed,
+            # retry in 4s (attempt 2)." string into the user's chat on
+            # every retry tick. Two issues: (a) the wording leaks the
+            # word "failed" before the retry has even given up, scaring
+            # users who would have gotten a normal answer 3 seconds
+            # later; (b) it spammed the chat at every heartbeat chunk
+            # of a long sleep. With the extended retry budget (60s
+            # total, six attempts) most transient errors resolve
+            # silently — emitting these notifications is a net loss.
+            #
+            # The full diagnostic text still lands in the gateway log
+            # via base._sleep_with_heartbeat's logger.warning, so the
+            # operator can correlate slow turns with a provider blip.
+            logger.debug("retry-wait callback (silenced for chat): {}", content)
 
         # Persist the triggering user message immediately, before running the
         # agent loop. If the process is killed mid-turn (OOM, SIGKILL, self-

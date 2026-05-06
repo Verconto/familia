@@ -546,13 +546,16 @@ async def test_list_jobs_during_on_job_does_not_cause_stale_reload(tmp_path) -> 
     service = CronService(store_path, on_job=on_job_that_lists, max_sleep_ms=100)
     await service.start()
 
-    # Add two jobs scheduled in the past so they're immediately due
+    # Add two jobs scheduled in the past so they're immediately due.
+    # Distinct messages keep them outside the add_job dedupe path
+    # (same schedule + same message + same recipient now collapses
+    # to a single job).
     now_ms = int(time.time() * 1000)
     for name in ("job-a", "job-b"):
         service.add_job(
             name=name,
             schedule=CronSchedule(kind="every", every_ms=3_600_000),
-            message="test",
+            message=f"test-{name}",
         )
     # Force next_run to the past so _on_timer picks them up
     for job in service._store.jobs:

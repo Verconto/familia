@@ -86,9 +86,67 @@ class OpenAICodexProvider(LLMProvider):
                 )
             return LLMResponse(content=content, tool_calls=tool_calls, finish_reason=finish_reason)
         except Exception as e:
+            # Build a structured error response so ``_run_with_retry``
+            # in base.py can decide retry/no-retry deterministically
+            # (without resorting to fuzzy text-marker scans on the
+            # final ``content``). Three classes:
+            #
+            #  * ``_CodexHTTPError`` — server response with a status
+            #    code; status drives retry policy in base._is_transient.
+            #  * ``asyncio.TimeoutError`` — our hard-cap fired, treat
+            #    as transient (kind=timeout).
+            #  * ``httpx`` connection / read errors — network blip,
+            #    treat as transient (kind=connection).
+            #  * everything else — surface to the user as final, but
+            #    still attempt the ``standard`` retry budget (one or
+            #    two passes won't hurt for a flaky transient).
             msg = f"Error calling Codex: {e}"
             retry_after = getattr(e, "retry_after", None) or self._extract_retry_after(msg)
-            return LLMResponse(content=msg, finish_reason="error", retry_after=retry_after)
+            status_code: int | None = None
+            should_retry: bool | None = None
+            kind: str | None = None
+            if isinstance(e, _CodexHTTPError):
+                # ``_CodexHTTPError`` carries the friendly message and,
+                # for HTTP failures, the source status code. We re-extract
+                # the status from the message because ``_friendly_error``
+                # already formatted it as ``HTTP <code>: …`` for non-429
+                # paths; for 429 the message is plain English so we set
+                # the code explicitly via the marker check.
+                if "HTTP " in msg:
+                    head = msg.split("HTTP ", 1)[1]
+                    digits = ""
+                    for ch in head:
+                        if ch.isdigit():
+                            digits += ch
+                        else:
+                            break
+                    if digits:
+                        try:
+                            status_code = int(digits)
+                        except ValueError:
+                            status_code = None
+                if status_code is None and "rate limit" in msg.lower():
+                    status_code = 429
+                if status_code is None and "timed out" in msg.lower():
+                    kind = "timeout"
+                    should_retry = True
+            elif isinstance(e, asyncio.TimeoutError):
+                kind = "timeout"
+                should_retry = True
+            elif isinstance(e, httpx.HTTPError):
+                # Catch-all for httpx connection / read / pool errors
+                # below the response level (no status code available).
+                kind = "connection"
+                should_retry = True
+            return LLMResponse(
+                content=msg,
+                finish_reason="error",
+                retry_after=retry_after,
+                error_status_code=status_code,
+                error_should_retry=should_retry,
+                error_kind=kind,
+                error_retry_after_s=retry_after,
+            )
 
     async def chat(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None,

@@ -91,7 +91,14 @@ _SYNTHETIC_USER_CONTENT = "(conversation continued)"
 class LLMProvider(ABC):
     """Base class for LLM providers."""
 
-    _CHAT_RETRY_DELAYS = (1, 2, 4)
+    # Six-stage backoff: ~1+2+4+8+15+30 = 60 seconds total before a
+    # transient provider error reaches the user as a friendly fallback.
+    # Was (1, 2, 4) = 3 attempts ~7 sec; that was too tight for chat
+    # users where a 429-burst from Anthropic / Codex routinely lasts
+    # 10-20 sec. With the runner suppressing raw provider text from
+    # the final user reply, the longer budget trades visible "error"
+    # messages for a slightly later but successful response.
+    _CHAT_RETRY_DELAYS = (1, 2, 4, 8, 15, 30)
     _PERSISTENT_MAX_DELAY = 60
     _PERSISTENT_IDENTICAL_ERROR_LIMIT = 10
     _RETRY_HEARTBEAT_CHUNK = 30

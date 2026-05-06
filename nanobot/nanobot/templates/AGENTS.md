@@ -16,4 +16,6 @@ Get USER_ID and CHANNEL from the current session (e.g., `8281248569` and `telegr
 - **Remove**: `edit_file` to delete completed tasks
 - **Rewrite**: `write_file` to replace all tasks
 
-When the user asks for a recurring/periodic task, update `HEARTBEAT.md` instead of creating a one-time cron reminder.
+When the user asks for a **time-of-day reminder** (e.g. "remind me daily at 12:00", "every Monday at 8 AM", "tomorrow at 18:00") — use the **`cron` tool**, NOT `HEARTBEAT.md`. Cron schedules deliver one message per fired tick; HEARTBEAT.md content is read by the heartbeat agent every interval and may be re-interpreted as a fresh request, so a reminder placed there will be surfaced repeatedly between the time-of-day instants.
+
+`HEARTBEAT.md` is for **non-scheduled persistent context** that the heartbeat agent should consider on every tick — open todos, ongoing watches ("notify when X happens"), background reminders without a fixed clock. If a task already has a `cron` job representing it, do NOT also write it into `HEARTBEAT.md`.

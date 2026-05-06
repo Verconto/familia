@@ -148,7 +148,17 @@ async def test_handle_activity_ignores_group_messages(make_channel):
 
 
 @pytest.mark.asyncio
-async def test_handle_activity_denied_sender_does_not_store_ref(make_channel, tmp_path):
+async def test_handle_activity_denied_sender_does_not_store_ref(make_channel, tmp_path, monkeypatch):
+    # ``BaseChannel.should_drop_inbound`` only drops senders that
+    # resolve to a known principal but are NOT in ``allow_from`` —
+    # unknown senders fall through to the agent loop's pending gate
+    # (so a human approver can let them in later). For this msteams
+    # adapter test we register the denied sender as a known principal
+    # so the adapter-level allow_from check fires.
+    monkeypatch.setattr(
+        "nanobot.channels.base.resolve_actor",
+        lambda channel, sender_id: "denied_user_actor",
+    )
     ch = make_channel(allowFrom=["allowed-user"])
 
     activity = {

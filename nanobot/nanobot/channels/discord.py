@@ -15,7 +15,6 @@ from pydantic import Field
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
-from nanobot.command.builtin import build_help_text
 from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import Base
 from nanobot.utils.helpers import safe_filename, split_message
@@ -24,12 +23,10 @@ DISCORD_AVAILABLE = importlib.util.find_spec("discord") is not None
 if TYPE_CHECKING:
     import aiohttp
     import discord
-    from discord import app_commands
     from discord.abc import Messageable
 
 if DISCORD_AVAILABLE:
     import discord
-    from discord import app_commands
     from discord.abc import Messageable
 
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024  # 20MB
@@ -80,97 +77,13 @@ if DISCORD_AVAILABLE:
         ) -> None:
             super().__init__(intents=intents, proxy=proxy, proxy_auth=proxy_auth)
             self._channel = channel
-            self.tree = app_commands.CommandTree(self)
-            self._register_app_commands()
 
         async def on_ready(self) -> None:
             self._channel._bot_user_id = str(self.user.id) if self.user else None
             logger.info("Discord bot connected as user {}", self._channel._bot_user_id)
-            try:
-                synced = await self.tree.sync()
-                logger.info("Discord app commands synced: {}", len(synced))
-            except Exception as e:
-                logger.warning("Discord app command sync failed: {}", e)
 
         async def on_message(self, message: discord.Message) -> None:
             await self._channel._handle_discord_message(message)
-
-        async def _reply_ephemeral(self, interaction: discord.Interaction, text: str) -> bool:
-            """Send an ephemeral interaction response and report success."""
-            try:
-                await interaction.response.send_message(text, ephemeral=True)
-                return True
-            except Exception as e:
-                logger.warning("Discord interaction response failed: {}", e)
-                return False
-
-        async def _forward_slash_command(
-            self,
-            interaction: discord.Interaction,
-            command_text: str,
-        ) -> None:
-            sender_id = str(interaction.user.id)
-            channel_id = interaction.channel_id
-
-            if channel_id is None:
-                logger.warning("Discord slash command missing channel_id: {}", command_text)
-                return
-
-            if self._channel.should_drop_inbound(sender_id):
-                await self._reply_ephemeral(interaction, "You are not allowed to use this bot.")
-                return
-
-            await self._reply_ephemeral(interaction, f"Processing {command_text}...")
-
-            await self._channel._handle_message(
-                sender_id=sender_id,
-                chat_id=str(channel_id),
-                content=command_text,
-                metadata={
-                    "interaction_id": str(interaction.id),
-                    "guild_id": str(interaction.guild_id) if interaction.guild_id else None,
-                    "is_slash_command": True,
-                },
-            )
-
-        def _register_app_commands(self) -> None:
-            commands = (
-                ("new", "Start a new conversation", "/new"),
-                ("stop", "Stop the current task", "/stop"),
-                ("restart", "Restart the bot", "/restart"),
-                ("status", "Show bot status", "/status"),
-            )
-
-            for name, description, command_text in commands:
-
-                @self.tree.command(name=name, description=description)
-                async def command_handler(
-                    interaction: discord.Interaction,
-                    _command_text: str = command_text,
-                ) -> None:
-                    await self._forward_slash_command(interaction, _command_text)
-
-            @self.tree.command(name="help", description="Show available commands")
-            async def help_command(interaction: discord.Interaction) -> None:
-                sender_id = str(interaction.user.id)
-                if self._channel.should_drop_inbound(sender_id):
-                    await self._reply_ephemeral(interaction, "You are not allowed to use this bot.")
-                    return
-                await self._reply_ephemeral(interaction, build_help_text())
-
-            @self.tree.error
-            async def on_app_command_error(
-                interaction: discord.Interaction,
-                error: app_commands.AppCommandError,
-            ) -> None:
-                command_name = interaction.command.qualified_name if interaction.command else "?"
-                logger.warning(
-                    "Discord app command failed user={} channel={} cmd={} error={}",
-                    interaction.user.id,
-                    interaction.channel_id,
-                    command_name,
-                    error,
-                )
 
         async def send_outbound(self, msg: OutboundMessage) -> None:
             """Send a nanobot outbound message using Discord transport rules."""

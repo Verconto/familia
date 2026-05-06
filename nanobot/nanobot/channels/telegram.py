@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 from loguru import logger
 from pydantic import Field
-from telegram import BotCommand, ReactionTypeEmoji, ReplyParameters, Update
+from telegram import ReactionTypeEmoji, ReplyParameters, Update
 from telegram.error import BadRequest, NetworkError, TimedOut
 from telegram.ext import Application, ContextTypes, MessageHandler, filters
 from telegram.request import HTTPXRequest
@@ -19,7 +19,6 @@ from telegram.request import HTTPXRequest
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
-from nanobot.command.builtin import build_help_text
 from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import Base
 from nanobot.security.network import validate_url_target
@@ -232,18 +231,9 @@ class TelegramChannel(BaseChannel):
     name = "telegram"
     display_name = "Telegram"
 
-    # Commands registered with Telegram's command menu
-    BOT_COMMANDS = [
-        BotCommand("start", "Start the bot"),
-        BotCommand("new", "Start a new conversation"),
-        BotCommand("stop", "Stop the current task"),
-        BotCommand("restart", "Restart the bot"),
-        BotCommand("status", "Show bot status"),
-        BotCommand("dream", "Run Dream memory consolidation now"),
-        BotCommand("dream_log", "Show the latest Dream memory change"),
-        BotCommand("dream_restore", "Restore Dream memory to an earlier version"),
-        BotCommand("help", "Show available commands"),
-    ]
+    # No slash commands registered with Telegram's menu — see commit
+    # message for the rationale. Bot listens to natural language only;
+    # auto-compact + Dream handle session management without UI.
 
     @classmethod
     def default_config(cls) -> dict[str, Any]:
@@ -283,17 +273,6 @@ class TelegramChannel(BaseChannel):
 
         return sid in allow_list or username in allow_list
 
-    @staticmethod
-    def _normalize_telegram_command(content: str) -> str:
-        """Map Telegram-safe command aliases back to canonical nanobot commands."""
-        if not content.startswith("/"):
-            return content
-        if content == "/dream_log" or content.startswith("/dream_log "):
-            return content.replace("/dream_log", "/dream-log", 1)
-        if content == "/dream_restore" or content.startswith("/dream_restore "):
-            return content.replace("/dream_restore", "/dream-restore", 1)
-        return content
-
     async def start(self) -> None:
         """Start the Telegram bot with long polling."""
         if not self.config.token:
@@ -332,27 +311,15 @@ class TelegramChannel(BaseChannel):
         self._app = builder.build()
         self._app.add_error_handler(self._on_error)
 
-        # Add command handlers (using Regex to support @username suffixes before bot initialization)
-        self._app.add_handler(MessageHandler(filters.Regex(r"^/start(?:@\w+)?$"), self._on_start))
+        # Single message handler: every text/photo/voice/audio/document/
+        # location update routes straight through the agent loop. No slash-
+        # command regexes — :class:`AgentLoop` no longer maintains a
+        # ``CommandRouter``; auto-compact and Dream handle session-level
+        # concerns without a UI affordance, and the LLM understands
+        # "забудь, давай заново" / "stop, не отвечай" in natural language.
         self._app.add_handler(
             MessageHandler(
-                filters.Regex(r"^/(new|stop|restart|status|dream)(?:@\w+)?(?:\s+.*)?$"),
-                self._forward_command,
-            )
-        )
-        self._app.add_handler(
-            MessageHandler(
-                filters.Regex(r"^/(dream-log|dream_log|dream-restore|dream_restore)(?:@\w+)?(?:\s+.*)?$"),
-                self._forward_command,
-            )
-        )
-        self._app.add_handler(MessageHandler(filters.Regex(r"^/help(?:@\w+)?$"), self._on_help))
-
-        # Add message handler for text, photos, voice, documents, and locations
-        self._app.add_handler(
-            MessageHandler(
-                (filters.TEXT | filters.PHOTO | filters.VOICE | filters.AUDIO | filters.Document.ALL | filters.LOCATION)
-                & ~filters.COMMAND,
+                (filters.TEXT | filters.PHOTO | filters.VOICE | filters.AUDIO | filters.Document.ALL | filters.LOCATION),
                 self._on_message
             )
         )
@@ -363,17 +330,25 @@ class TelegramChannel(BaseChannel):
         await self._app.initialize()
         await self._app.start()
 
-        # Get bot info and register command menu
+        # Get bot info; no slash-command menu to register — the bot is
+        # natural-language only.
         bot_info = await self._app.bot.get_me()
         self._bot_user_id = getattr(bot_info, "id", None)
         self._bot_username = getattr(bot_info, "username", None)
         logger.info("Telegram bot @{} connected", bot_info.username)
 
+        # Best-effort wipe of any commands previously registered with
+        # BotFather / older versions of this code, so the in-app menu
+        # doesn't keep showing /new /stop /dream etc. Failure is fine —
+        # the menu is cosmetic, the regex handlers were the actual
+        # routing surface and they're already gone.
         try:
-            await self._app.bot.set_my_commands(self.BOT_COMMANDS)
-            logger.debug("Telegram bot commands registered")
+            from telegram import BotCommand  # noqa: PLC0415 — local to keep top imports tight
+            await self._app.bot.set_my_commands([])  # empty list clears the menu
+            logger.debug("Telegram bot command menu cleared")
+            del BotCommand
         except Exception as e:
-            logger.warning("Failed to register bot commands: {}", e)
+            logger.warning("Failed to clear bot command menu: {}", e)
 
         # Start polling (this runs until stopped)
         await self._app.updater.start_polling(
@@ -732,24 +707,6 @@ class TelegramChannel(BaseChannel):
         buf.message_id = sent.message_id
         buf.text = tail
 
-    async def _on_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle /start command."""
-        if not update.message or not update.effective_user:
-            return
-
-        user = update.effective_user
-        await update.message.reply_text(
-            f"👋 Hi {user.first_name}! I'm nanobot.\n\n"
-            "Send me a message and I'll respond!\n"
-            "Type /help to see available commands."
-        )
-
-    async def _on_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle /help command, bypassing ACL so all users can access it."""
-        if not update.message:
-            return
-        await update.message.reply_text(build_help_text())
-
     @staticmethod
     def _sender_id(user) -> str:
         """Build sender_id with username for allowlist matching."""
@@ -955,30 +912,6 @@ class TelegramChannel(BaseChannel):
         self._message_threads[key] = message_thread_id
         if len(self._message_threads) > 1000:
             self._message_threads.pop(next(iter(self._message_threads)))
-
-    async def _forward_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Forward slash commands to the bus for unified handling in AgentLoop."""
-        if not update.message or not update.effective_user:
-            return
-        message = update.message
-        user = update.effective_user
-        self._remember_thread_context(message)
-
-        # Strip @bot_username suffix if present
-        content = message.text or ""
-        if content.startswith("/") and "@" in content:
-            cmd_part, *rest = content.split(" ", 1)
-            cmd_part = cmd_part.split("@")[0]
-            content = f"{cmd_part} {rest[0]}" if rest else cmd_part
-        content = self._normalize_telegram_command(content)
-
-        await self._handle_message(
-            sender_id=self._sender_id(user),
-            chat_id=str(message.chat_id),
-            content=content,
-            metadata=self._build_message_metadata(message, user),
-            session_key=self._derive_topic_session_key(message),
-        )
 
     async def _on_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming messages (text, photos, voice, documents)."""

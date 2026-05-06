@@ -450,9 +450,22 @@ class AgentRunner:
                 continue
 
             if response.finish_reason == "error":
-                final_content = clean or spec.error_message or _DEFAULT_ERROR_MESSAGE
+                # User sees the friendly fallback regardless of what the
+                # provider wrote into ``response.content``. Raw provider
+                # text ("Error calling Codex: HTTP 503: …", a stack
+                # trace, an internal field name, …) is never useful to
+                # an end user and frequently leaks API-shape detail.
+                # Audit/logs keep the full text via ``error`` for ops.
+                friendly = spec.error_message or _DEFAULT_ERROR_MESSAGE
+                raw_detail = (clean or "").strip() or friendly
+                final_content = friendly
                 stop_reason = "error"
-                error = final_content
+                error = raw_detail
+                logger.warning(
+                    "LLM error surfaced to user as friendly fallback "
+                    "(raw kept in audit): {}",
+                    raw_detail[:300],
+                )
                 self._append_model_error_placeholder(messages)
                 context.final_content = final_content
                 context.error = error

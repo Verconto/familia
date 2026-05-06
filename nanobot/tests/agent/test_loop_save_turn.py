@@ -222,7 +222,7 @@ async def test_process_message_persists_user_message_before_turn_completes(tmp_p
     loop.consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=False)  # type: ignore[method-assign]
     loop._run_agent_loop = AsyncMock(side_effect=RuntimeError("boom"))  # type: ignore[method-assign]
 
-    msg = InboundMessage(channel="feishu", sender_id="u1", chat_id="c1", content="persist me")
+    msg = InboundMessage(channel="feishu", sender_id="u1", chat_id="c1", content="persist me", actor="test_actor")
     with pytest.raises(RuntimeError, match="boom"):
         await loop._process_message(msg)
 
@@ -251,7 +251,7 @@ async def test_process_message_does_not_duplicate_early_persisted_user_message(t
     ))  # type: ignore[method-assign]
 
     result = await loop._process_message(
-        InboundMessage(channel="feishu", sender_id="u1", chat_id="c2", content="hello")
+        InboundMessage(channel="feishu", sender_id="u1", chat_id="c2", content="hello", actor="test_actor")
     )
 
     assert result is not None
@@ -293,7 +293,7 @@ async def test_next_turn_after_crash_closes_pending_user_turn_before_new_input(t
     ))  # type: ignore[method-assign]
 
     result = await loop._process_message(
-        InboundMessage(channel="feishu", sender_id="u1", chat_id="c3", content="new question")
+        InboundMessage(channel="feishu", sender_id="u1", chat_id="c3", content="new question", actor="test_actor")
     )
 
     assert result is not None
@@ -313,9 +313,9 @@ async def test_next_turn_after_crash_closes_pending_user_turn_before_new_input(t
 
 @pytest.mark.asyncio
 async def test_stop_preserves_runtime_checkpoint_for_next_turn(tmp_path: Path) -> None:
-    from nanobot.command.builtin import cmd_stop
-    from nanobot.command.router import CommandContext
-
+    # Direct ``loop._cancel_active_tasks`` (formerly behind ``cmd_stop``)
+    # so the checkpoint-preservation guarantee is still exercised after
+    # the slash-command router was removed.
     loop = _make_full_loop(tmp_path)
     loop.consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=False)  # type: ignore[method-assign]
 
@@ -364,16 +364,24 @@ async def test_stop_preserves_runtime_checkpoint_for_next_turn(tmp_path: Path) -
 
     loop._run_agent_loop = interrupted_run_agent_loop  # type: ignore[method-assign]
 
-    first_msg = InboundMessage(channel="feishu", sender_id="u1", chat_id="c4", content="keep progress")
+    first_msg = InboundMessage(channel="feishu", sender_id="u1", chat_id="c4", content="keep progress", actor="test_actor")
     task = asyncio.create_task(loop._process_message(first_msg))
     loop._active_tasks[first_msg.session_key] = [task]
     await asyncio.wait_for(checkpoint_saved.wait(), timeout=1.0)
 
-    stop_msg = InboundMessage(channel="feishu", sender_id="u1", chat_id="c4", content="/stop")
-    stop_ctx = CommandContext(msg=stop_msg, session=None, key=stop_msg.session_key, raw="/stop", loop=loop)
-    stop_result = await cmd_stop(stop_ctx)
+    # Cancel the running task directly — equivalent of the old
+    # ``cmd_stop`` priority command path.
+    cancelled = 0
+    for active in loop._active_tasks.get(first_msg.session_key, []):
+        if not active.done():
+            active.cancel()
+            cancelled += 1
+    try:
+        await task
+    except (asyncio.CancelledError, BaseException):
+        pass
 
-    assert "Stopped 1 task" in stop_result.content
+    assert cancelled == 1
     assert task.done()
 
     loop.sessions.invalidate("feishu:c4")
@@ -392,7 +400,7 @@ async def test_stop_preserves_runtime_checkpoint_for_next_turn(tmp_path: Path) -
 
     loop._run_agent_loop = resumed_run_agent_loop  # type: ignore[method-assign]
     result = await loop._process_message(
-        InboundMessage(channel="feishu", sender_id="u1", chat_id="c4", content="continue here")
+        InboundMessage(channel="feishu", sender_id="u1", chat_id="c4", content="continue here", actor="test_actor")
     )
 
     assert result is not None

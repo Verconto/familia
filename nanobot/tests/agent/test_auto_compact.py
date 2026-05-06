@@ -11,7 +11,6 @@ from nanobot.agent.loop import AgentLoop
 from nanobot.bus.events import InboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.config.schema import AgentDefaults
-from nanobot.command import CommandContext
 from nanobot.providers.base import LLMResponse
 
 
@@ -292,55 +291,11 @@ class TestAutoCompactIdleDetection:
         assert any(m["content"] == "recent message" for m in session_after.messages)
         await loop.close_mcp()
 
-    @pytest.mark.asyncio
-    async def test_auto_compact_does_not_affect_priority_commands(self, tmp_path):
-        """Priority commands (/stop, /restart) bypass _process_message entirely via run()."""
-        loop = _make_loop(tmp_path, session_ttl_minutes=15)
-        session = loop.sessions.get_or_create("cli:test")
-        session.add_message("user", "old message")
-        session.updated_at = datetime.now() - timedelta(minutes=20)
-        loop.sessions.save(session)
-
-        # Priority commands are dispatched in run() before _process_message is called.
-        # Simulate that path directly via dispatch_priority.
-        raw = "/stop"
-        msg = InboundMessage(channel="cli", sender_id="user", chat_id="test", content=raw)
-        ctx = CommandContext(msg=msg, session=session, key="cli:test", raw=raw, loop=loop)
-        result = await loop.commands.dispatch_priority(ctx)
-        assert result is not None
-        assert "stopped" in result.content.lower() or "no active task" in result.content.lower()
-
-        # Session should be untouched since priority commands skip _process_message
-        session_after = loop.sessions.get_or_create("cli:test")
-        assert any(m["content"] == "old message" for m in session_after.messages)
-        await loop.close_mcp()
-
-    @pytest.mark.asyncio
-    async def test_auto_compact_with_slash_new(self, tmp_path):
-        """Auto-new fires before /new dispatches; session is cleared twice but idempotent."""
-        loop = _make_loop(tmp_path, session_ttl_minutes=15)
-        session = loop.sessions.get_or_create("cli:test")
-        for i in range(4):
-            session.add_message("user", f"msg{i}")
-            session.add_message("assistant", f"resp{i}")
-        session.updated_at = datetime.now() - timedelta(minutes=20)
-        loop.sessions.save(session)
-
-        async def _fake_archive(messages):
-            return "Summary."
-
-        loop.consolidator.archive = _fake_archive
-
-        msg = InboundMessage(channel="cli", sender_id="user", chat_id="test", content="/new")
-        response = await loop._process_message(msg)
-
-        assert response is not None
-        assert "new session started" in response.content.lower()
-
-        session_after = loop.sessions.get_or_create("cli:test")
-        # Session is empty (auto-new archived and cleared, /new cleared again)
-        assert len(session_after.messages) == 0
-        await loop.close_mcp()
+    # Slash-command integration tests (test_auto_compact_does_not_affect_priority_commands,
+    # test_auto_compact_with_slash_new) were removed when the slash-command
+    # router was deleted from the agent loop. Auto-compact / auto-new
+    # behaviour is fully covered by the natural-language-only tests
+    # above; the bot no longer has a /new or /stop UI surface.
 
 
 class TestAutoCompactSystemMessages:
