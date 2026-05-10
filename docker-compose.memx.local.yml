@@ -1,0 +1,16 @@
+# Local-build override for docker-compose.memx.yml.
+# Use when developing in-tree; restores `build:` against ./memx instead of
+# pulling from ghcr.
+#
+# Usage:
+#   docker compose -f docker-compose.memx.yml -f docker-compose.memx.local.yml up -d --build
+
+services:
+  memx-backend:
+    build:
+      context: ./memx
+      dockerfile: Dockerfile
+      args:
+        APT_MIRROR: "${APT_MIRROR:-}"
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-}"
+    image: memx:local

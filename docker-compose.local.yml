@@ -1,0 +1,21 @@
+# Local-build override for docker-compose.yml.
+# Use when developing in-tree; restores `build:` against the source tree
+# instead of pulling from ghcr.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+
+services:
+  familia-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Forwarded by bootstrap.sh on restricted-egress hosts. Defaults
+        # are empty → Dockerfile keeps upstream pypi/debian/npmjs URLs.
+        APT_MIRROR: "${APT_MIRROR:-}"
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-}"
+        NPM_REGISTRY: "${NPM_REGISTRY:-}"
+        NANOBOT_UID: "${NANOBOT_UID:-1000}"
+        NANOBOT_GID: "${NANOBOT_GID:-1000}"
+    image: familia-assistant:local
