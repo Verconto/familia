@@ -1,6 +1,8 @@
 # Local working notes (planning docs, drafts, scratch)
 notes/
 *.local.*
+!docker-compose.local.yml
+!docker-compose.memx.local.yml
 .tmp-*
 _tmp_*
 audit_*.txt
