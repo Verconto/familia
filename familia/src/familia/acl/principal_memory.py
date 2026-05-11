@@ -71,12 +71,22 @@ class PrincipalMemoryClient:
         set_raw(self._own_key(suffix), value, api_key=self._api_key)
 
     def get_other(self, other_id: str, suffix: str) -> str | None:
-        """Read a peer's namespace after policy-check.
+        """Read a peer's namespace under the family-by-default model.
 
-        Synthetic ``PolicyContext(action="memory.read", actor=self.id,
-        to_chat=full_key)`` decides allow/deny. On allow, fetches with
-        own api_key (memX-ACL is the second guard). On deny or any
-        error, returns ``None``.
+        Path (0.3.0):
+          1. self read → fast path through :meth:`get`.
+          2. Synthetic policy check (legacy gate). Deny → None.
+          3. If self and ``other_id`` are connected by a peer-edge in
+             family.graph (``acl.peers.is_peer``), read via the admin
+             proxy key. Records tagged ``secret`` are filtered out and
+             yield ``None`` (fail-closed).
+          4. Otherwise fall back to caller's own api_key. This still
+             works for the admin/owner who holds ``private:*`` in their
+             acl.json scope list, and silently 403s for narrow
+             per-principal keys.
+
+        On any exception, return ``None`` — never raise into the
+        prompt-building path.
         """
         if other_id == self.principal_id:
             return self.get(suffix)
@@ -97,6 +107,54 @@ class PrincipalMemoryClient:
             return None
         if decision.decision is Decision.DENY:
             return None
+
+        # Peer-edge fast path. Only ``private:`` keys flow through here;
+        # peers of one actor can read each other's private namespace by
+        # default, with ``secret``-tagged records filtered.
+        peer_path_ok = False
+        if full_key.startswith("private:"):
+            try:
+                from familia.acl.peers import is_peer  # noqa: PLC0415
+                peer_path_ok = is_peer(self.principal_id, other_id)
+            except Exception:  # noqa: BLE001 — never break prompt assembly
+                peer_path_ok = False
+        if peer_path_ok:
+            try:
+                from familia.acl.graph_io import resolve_admin_key  # noqa: PLC0415
+                proxy_key = resolve_admin_key()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "principal_memory.get_other({}): admin key unavailable: {}",
+                    other_id, exc,
+                )
+                proxy_key = None
+            if proxy_key:
+                try:
+                    raw = get_raw(full_key, api_key=proxy_key)
+                except GraphIOError as exc:
+                    logger.warning(
+                        "principal_memory.get_other({}) proxy: {}", other_id, exc,
+                    )
+                    return None
+                text = _coerce_to_str(raw)
+                if text is None:
+                    return None
+                # Filter ``secret``-tagged records — same fail-closed
+                # semantics as MemoryGetTool._read_peer_private.
+                try:
+                    from familia.acl import codec  # noqa: PLC0415
+                    wrapped = codec.decode(text)
+                except Exception:  # noqa: BLE001
+                    wrapped = None
+                if wrapped is not None:
+                    if "secret" in (wrapped.tags or []):
+                        return None
+                    return wrapped.value
+                return text
+
+        # Fallback: caller's narrow key. Admin/owner with private:* in
+        # their acl scope succeeds; narrow per-principal keys 403 →
+        # None.
         try:
             raw = get_raw(full_key, api_key=self._api_key)
         except GraphIOError as exc:

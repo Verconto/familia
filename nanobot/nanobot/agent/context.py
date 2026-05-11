@@ -58,6 +58,24 @@ class ContextBuilder:
         if bootstrap:
             parts.append(bootstrap)
 
+        # Conversation-continuity rules: short/pronoun-only follow-ups
+        # should be interpreted as continuations of the prior assistant
+        # turn rather than fresh topics. Lives in code (not in
+        # user-editable SOUL.md) so it doesn't clutter the persona file
+        # the operator sees in admin.
+        parts.append(render_template("agent/conversation_rules.md"))
+
+        # Memory-scope defaults: family-by-default for private records.
+        # Peers can read each other's private:* unless tagged 'secret'.
+        # Also code-level, not user-editable.
+        parts.append(render_template("agent/scope_defaults.md"))
+
+        # User-facing memory model: enables the assistant to answer
+        # questions about access/visibility honestly and consistently.
+        # Without this, the LLM falls back on the dictionary meaning of
+        # "private" and contradicts the actual ACL behaviour.
+        parts.append(render_template("agent/memory_model.md"))
+
         # Per-principal USER + MEMORY blocks. Falls back to legacy
         # workspace/USER.md and workspace/memory/MEMORY.md when actor
         # is None or memX is unreachable.
@@ -434,6 +452,9 @@ class ContextBuilder:
             # Newest first; accept both legacy bare-string and
             # current ``{"name", "tags"}`` formats. Records carrying
             # tags are filtered against the actor's reachable set.
+            # For private-scope peer index, the ``secret`` tag also
+            # hides the name — secret-tagged records stay owner-only
+            # even with a peer-edge (family-by-default opt-out).
             filtered: list[str] = []
             for entry in reversed(entries):
                 if isinstance(entry, str) and entry:
@@ -448,6 +469,12 @@ class ContextBuilder:
                     t for t in (entry.get("tags") or [])
                     if isinstance(t, str) and t
                 ]
+                # Secret-tagged private records are never surfaced to
+                # peers — neither the name nor the value. Applies only
+                # to the private peer-index, not shared (where the
+                # tag-ACL reachability check governs visibility).
+                if scope_label == "private" and "secret" in rec_tags:
+                    continue
                 if not rec_tags:
                     # Untagged record — readable to anyone with
                     # shared:* memX scope (which every principal has).
@@ -493,11 +520,10 @@ class ContextBuilder:
             )
         else:
             intro = (
-                "Custom ``private:`` keys of your peers. Read with the "
-                "operator's CLI or admin tooling — the chat-side "
-                "``memory_get`` only reads your own private namespace. "
-                "Listed here so you can ask the operator or use the "
-                "key names as topic anchors in conversation."
+                "Custom ``private:`` keys of your peers. Read with "
+                "``memory_get(scope='private', actor='<their_id>', "
+                "key='<name>')``. Records the peer tagged ``secret`` "
+                "are filtered from this list and remain owner-only."
             )
 
         body = "\n\n".join(sections)

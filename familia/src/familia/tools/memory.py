@@ -29,6 +29,8 @@ from loguru import logger
 
 from familia import audit
 from familia.acl import codec, schema as acl_schema
+from familia.acl.graph_io import resolve_admin_key
+from familia.acl.peers import is_peer
 from familia.acl.reachable import reachable_tag_ids
 from familia.memx_client import memx_base_url
 from familia.policy import Decision, PolicyContext, get_engine
@@ -38,13 +40,23 @@ from nanobot.agent.tools.base import Tool, tool_parameters
 from nanobot.agent.tools.schema import ArraySchema, StringSchema, tool_parameters_schema
 SCOPE_DESC = (
     "Memory scope: 'shared' (visible to the whole family) or "
-    "'private' (only the current actor). "
-    "Cross-principal access is NOT controlled by scope choice — it's "
-    "controlled by peer-edges in the family graph plus per-record "
-    "tags. To share a fact with a specific principal, write it to "
-    "'shared' with that principal's id in the 'tags' field; peer "
-    "stitching + tag ACL will surface it on their side automatically."
+    "'private' (default: only the current actor; readable by peer-edge "
+    "principals when 'actor' parameter names a peer). "
+    "Cross-principal access is gated by the family graph (is_peer) plus "
+    "per-record tags. Records tagged 'secret' stay owner-only even with "
+    "an active peer-edge."
 )
+
+# Opt-out tag: a record carrying this tag is readable only by its owner,
+# regardless of peer-edges. Used for genuinely sensitive content the user
+# does not want to share with peers despite the family-by-default model
+# (gifts, therapy/health notes, work secrets).
+SECRET_TAG = "secret"
+
+# Synthetic tags that don't refer to a graph identity (principal id or
+# topic id). They are ACL-modifiers, not reachability handles, so
+# _check_write_acl must not require the writer to "reach" them.
+_SYSTEM_TAGS = frozenset({SECRET_TAG})
 
 # Hard cap on a single memX value. memX itself doesn't enforce one and a
 # jailbroken agent could otherwise fill the store with multi-MB blobs.
@@ -158,7 +170,13 @@ async def _check_read_acl(
 async def _check_write_acl(
     actor_id: str, api_key: str, tags: set[str], full_key: str,
 ) -> tuple[bool, str]:
-    """SR-7: writer must have access to every tag they're trying to set."""
+    """SR-7: writer must have access to every tag they're trying to set.
+
+    System tags (currently just ``secret``) are exempt — they are
+    synthetic ACL hints, not graph identities. ``secret`` lets any
+    actor narrow their own record's visibility to themselves alone,
+    without needing to be reachable to that "tag-id" in the graph.
+    """
     if _is_admin(actor_id):
         audit.log_event(
             "tag_acl_decision", op="write", actor=actor_id,
@@ -168,7 +186,9 @@ async def _check_write_acl(
         return True, "admin_bypass"
     base_url = memx_base_url()
     reachable = await _reachable_for(actor_id, api_key, base_url)
-    missing = tags - reachable
+    # System tags don't participate in the reachable-set check.
+    tags_to_check = tags - _SYSTEM_TAGS
+    missing = tags_to_check - reachable
     decision = "allow" if not missing else "deny"
     audit.log_event(
         "tag_acl_decision", op="write", actor=actor_id,
@@ -184,8 +204,21 @@ async def _check_write_acl(
     )
 
 
-def _resolve_full_key(scope: str, key: str, actor_id: str) -> tuple[str | None, str | None]:
+def _resolve_full_key(
+    scope: str,
+    key: str,
+    actor_id: str,
+    target_actor: str | None = None,
+) -> tuple[str | None, str | None]:
     """Return (full_key, error).  Full key is None when input is invalid.
+
+    ``target_actor`` allows cross-principal reads of ``private:`` scope:
+    when set and different from ``actor_id``, the key resolves to
+    ``private:<target_actor>:<key>``. Permission to actually read is
+    enforced downstream (is_peer check + secret-tag filter in
+    MemoryGetTool.execute). ``target_actor`` is rejected for non-private
+    scopes — ``shared:`` is global, ``pair:`` already names the other
+    principal via scope syntax.
 
     For ``pair:`` scope we accept two forms:
       * ``pair:<other_id>`` — documented form, just the other principal.
@@ -198,10 +231,22 @@ def _resolve_full_key(scope: str, key: str, actor_id: str) -> tuple[str | None, 
         return None, "Error: 'key' is required"
     scope = (scope or "").strip()
     if scope == "shared":
+        if target_actor and target_actor != actor_id:
+            return None, "Error: 'actor' parameter is only valid for 'private' scope"
         return f"shared:{key}", None
     if scope == "private":
-        return f"private:{actor_id}:{key}", None
+        owner = (target_actor or actor_id).strip()
+        if not owner:
+            return None, "Error: 'actor' must be a non-empty principal id"
+        # All private:<owner>:<key> reads flow through the same gate
+        # (is_peer + secret-tag). Reserved value:* slots (user_profile,
+        # memory, heartbeat, *_index) are no longer special-cased — a
+        # peer can read them by default; the owner narrows specific
+        # records back to themselves with the ``secret`` tag.
+        return f"private:{owner}:{key}", None
     if scope.startswith("pair:"):
+        if target_actor and target_actor != actor_id:
+            return None, "Error: 'actor' parameter is only valid for 'private' scope"
         raw = scope[len("pair:"):].strip()
         if not raw:
             return None, "Error: pair scope requires another principal id, e.g. 'pair:member_a'"
@@ -255,10 +300,23 @@ _TAGS_DESC = (
 )
 
 
+_ACTOR_PARAM_DESC = (
+    "Optional principal id whose namespace to read. Defaults to the "
+    "current actor (own namespace). Only valid for 'private' scope. "
+    "When the named principal is a peer in the family graph "
+    "(spouse_of / guardian_of edge, role:child excluded), reads any "
+    "of their private records — custom keys AND reserved value:* "
+    "slots (value:memory, value:user_profile, value:heartbeat, "
+    "*_index). Records tagged 'secret' by the owner are never "
+    "returned cross-actor and yield 'no value stored'."
+)
+
+
 @tool_parameters(
     tool_parameters_schema(
         scope=StringSchema(SCOPE_DESC),
         key=StringSchema("Bare memory key (no scope prefix; e.g. 'todo', 'grocery_list')"),
+        actor=StringSchema(_ACTOR_PARAM_DESC, nullable=True),
         required=["scope", "key"],
     )
 )
@@ -277,39 +335,74 @@ class MemoryGetTool(Tool):
         return (
             "Read a value from scoped family memory (memX).\n\n"
             "Scopes:\n"
-            "  • 'private' — keys visible only to the current actor. "
-            "USE THIS for personal facts about the current user. The "
-            "reserved keys 'value:user_profile', 'value:memory', "
-            "'value:heartbeat' are auto-loaded into every turn — read "
-            "them when you need your own long-term context. Custom "
-            "private keys you wrote in earlier turns show up in the "
-            "'Private keys you've written' block of the system prompt — "
-            "consult it before guessing key names like 'profile'/'todo' "
-            "etc that may not exist.\n"
-            "  • 'shared' — keys visible to every family member. Use for "
-            "facts that concern the whole household (calendar, family "
-            "rules, etc.). Custom shared keys you wrote in earlier turns "
-            "show up in the 'Shared keys you've written' block of the "
-            "system prompt — consult it before guessing key names.\n\n"
-            "Cross-principal access is governed by peer-edges in the "
-            "family graph and per-record tags, NOT by scope choice. "
-            "Reading another principal's private key is denied at the "
-            "ACL layer; their relevant context is auto-stitched into "
-            "your prompt by the gateway when a peer-edge exists. Don't "
-            "try to fetch peer data with memory_get directly."
+            "  • 'private' — by default the current actor's own "
+            "namespace. With the optional 'actor' parameter set to a "
+            "peer principal's id, reads ANY of that peer's private "
+            "records — custom keys AND reserved value:* slots "
+            "(value:memory, value:user_profile, value:heartbeat). "
+            "Records the owner tagged 'secret' are filtered "
+            "(returned as 'no value stored').\n"
+            "  • 'shared' — keys visible to every family member.\n\n"
+            "Family-by-default: every `private:` record is peer-"
+            "readable unless tagged 'secret'. When a user asks about a "
+            "peer's plans, schedule, notes, profile — TRY "
+            "memory_get(scope='private', actor='<peer_id>', "
+            "key='value:memory') first (the peer's running scratchpad "
+            "where most coordination data lives) before reporting "
+            "'nothing found'.\n\n"
+            "Your own custom keys appear in the 'Private/Shared keys "
+            "you've written' system-prompt blocks; peers' custom keys "
+            "appear in the cross-principal index blocks. Reserved "
+            "slots are not indexed — read them by their fixed names."
         )
 
     @property
     def read_only(self) -> bool:
         return True
 
-    async def execute(self, scope: str, key: str, **kwargs: Any) -> str:
+    async def execute(
+        self,
+        scope: str,
+        key: str,
+        actor: str | None = None,
+        **kwargs: Any,
+    ) -> str:
         actor_id, api_key, err = _current_actor_and_key()
         if err:
             return err
-        full_key, err = _resolve_full_key(scope, key, actor_id)
+        target_actor = (actor or "").strip() or None
+        full_key, err = _resolve_full_key(
+            scope, key, actor_id, target_actor=target_actor,
+        )
         if err:
             return err
+        is_peer_read = (
+            scope == "private"
+            and target_actor is not None
+            and target_actor != actor_id
+        )
+        if is_peer_read:
+            # Peer read: gate at tool layer via is_peer (graph-based,
+            # excludes child role). No policy lookup — policy.yaml only
+            # carries scope-level rules, the cross-actor decision is
+            # graph-driven by design.
+            if not is_peer(actor_id, target_actor):
+                try:
+                    audit.log_event(
+                        "peer_private_read", actor=actor_id,
+                        peer=target_actor, key=full_key,
+                        decision="deny", reason="not_peer",
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                # Fail-closed: don't leak whether the principal exists
+                # or whether they have such a key.
+                return f"(no value stored at '{full_key}')"
+            return await self._read_peer_private(
+                actor_id=actor_id,
+                peer_id=target_actor,
+                full_key=full_key,
+            )
         decision = get_engine().evaluate(
             PolicyContext(action="memory.read", actor=actor_id, to_chat=full_key)
         )
@@ -355,7 +448,13 @@ class MemoryGetTool(Tool):
             return json.dumps(value, ensure_ascii=False)
         # ``value`` is a string. Try wrapped → tag ACL; else legacy.
         wrapped = codec.decode(value) if isinstance(value, str) else None
-        if wrapped is not None and wrapped.tags:
+        # Owner-of-namespace bypass: reading your own private record
+        # never gates on tag-ACL. Arbitrary tags you wrote on your own
+        # record (e.g. the ``secret`` opt-out tag) must not lock you
+        # out of your own data. Peers go through the separate
+        # _read_peer_private path, which has its own secret-tag check.
+        own_private = full_key.startswith(f"private:{actor_id}:")
+        if wrapped is not None and wrapped.tags and not own_private:
             allowed, reason = await _check_read_acl(
                 actor_id, api_key, set(wrapped.tags), full_key,
             )
@@ -364,9 +463,105 @@ class MemoryGetTool(Tool):
                 return f"(no value stored at '{full_key}')"
             return wrapped.value
         if wrapped is not None:
-            # Wrapped but no tags — value is back to "everyone within scope".
+            # Wrapped (own private OR no tags) — return raw value.
             return wrapped.value
         return str(value)
+
+    async def _read_peer_private(
+        self,
+        *,
+        actor_id: str,
+        peer_id: str,
+        full_key: str,
+    ) -> str:
+        """Fetch ``private:<peer_id>:<key>`` through the admin proxy key.
+
+        Caller has already passed the is_peer gate. We use the
+        admin/proxy key (``resolve_admin_key``) instead of the caller's
+        per-actor narrow key, because per-principal memX
+        keys only grant ``private:<self>:*`` — they cannot reach a
+        peer's namespace directly. The proxy path keeps acl.json
+        minimal and lets the family graph be the single source of
+        truth for peer permissions.
+
+        Defense-in-depth: even with the proxy key, records tagged
+        ``SECRET_TAG`` are filtered here, fail-closed (no value, no hint
+        about existence).
+        """
+        try:
+            proxy_key = resolve_admin_key()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("peer-private: admin key unavailable: {}", exc)
+            try:
+                audit.log_event(
+                    "peer_private_read", actor=actor_id, peer=peer_id,
+                    key=full_key, decision="deny", reason="no_admin_key",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            return f"Error: peer-read backend unavailable for '{full_key}'"
+        base_url = self._base_url_override or memx_base_url()
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                r = await client.get(
+                    f"{base_url}/get",
+                    headers={"x-api-key": proxy_key},
+                    params={"key": full_key},
+                )
+        except httpx.HTTPError as exc:
+            return f"Error: memX unreachable ({type(exc).__name__}: {exc})"
+        if r.status_code == 404:
+            try:
+                audit.log_event(
+                    "peer_private_read", actor=actor_id, peer=peer_id,
+                    key=full_key, decision="not_found",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            return f"(no value stored at '{full_key}')"
+        if r.status_code >= 400:
+            return f"Error: memX {r.status_code}: {r.text[:200]}"
+        try:
+            payload = r.json()
+        except ValueError:
+            return r.text
+        if payload is None:
+            return f"(no value stored at '{full_key}')"
+        if isinstance(payload, dict):
+            value = payload.get("value", payload)
+        else:
+            value = payload
+        if value is None:
+            return f"(no value stored at '{full_key}')"
+        wrapped = codec.decode(value) if isinstance(value, str) else None
+        record_tags: set[str] = set()
+        if wrapped is not None:
+            record_tags = set(wrapped.tags or [])
+            effective_value: Any = wrapped.value
+        elif isinstance(value, (dict, list)):
+            effective_value = json.dumps(value, ensure_ascii=False)
+        else:
+            effective_value = str(value)
+        if SECRET_TAG in record_tags:
+            try:
+                audit.log_event(
+                    "peer_private_read", actor=actor_id, peer=peer_id,
+                    key=full_key, decision="deny", reason="secret_tag",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            # Fail-closed: indistinguishable from "no such key" — don't
+            # leak even the existence of a secret-tagged record.
+            return f"(no value stored at '{full_key}')"
+        try:
+            audit.log_event(
+                "peer_private_read", actor=actor_id, peer=peer_id,
+                key=full_key, decision="allow",
+                tags=sorted(record_tags) if record_tags else [],
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return effective_value
 
 
 @tool_parameters(
@@ -392,6 +587,12 @@ class MemorySetTool(Tool):
     def description(self) -> str:
         return (
             "Write a value to scoped family memory (memX).\n\n"
+            "Family-by-default: ``private:`` records without the "
+            "``secret`` tag are readable by every peer-edge principal "
+            "(spouse / guardian). To keep a record owner-only — gifts, "
+            "therapy/health notes, work secrets — include ``secret`` in "
+            "the ``tags`` list. The owner always sees their own records "
+            "regardless of tag.\n\n"
             "WHERE TO WRITE — pick the scope deliberately:\n"
             "  • Personal facts about the current user (preferences, "
             "ongoing context, profile bits, anything that follows them "
