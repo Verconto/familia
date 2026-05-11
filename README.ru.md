@@ -4,7 +4,9 @@
 Telegram и ВКонтакте, помнит каждого отдельно, и не путает мужа с женой и
 детьми.
 
-<!-- TODO: screenshot of admin app -->
+<p align="center">
+  <img src=".github/assets/familia-readme.jpg" alt="Изображение семейного ИИ-помощника Familia" width="960">
+</p>
 
 Репозиторий: <https://github.com/Verconto/familia>. Последний релиз — `v0.5.60`,
 бэкенд `0.2.3`.
@@ -165,6 +167,10 @@ Telegram и ВКонтакте, помнит каждого отдельно, и
 
 Через ~5 минут бот в семейном чате отвечает.
 
+<p align="center">
+  <img src=".github/assets/admin-ru.jpg" alt="Админка Familia на Windows" width="960">
+</p>
+
 ### Что подготовить заранее
 
 - **SSH-доступ к VPS** — логин (обычно `root`) и пароль ИЛИ SSH-ключ.
@@ -208,16 +214,16 @@ Telegram и ВКонтакте, помнит каждого отдельно, и
 
 ## Я хочу собрать сам, из исходников
 
-Тебе сюда: [`docs/build-from-source.md`](docs/build-from-source.md).
+Тебе сюда: [`docs/build-from-source.ru.md`](docs/build-from-source.ru.md).
 
 ## Документация
 
-- [`docs/architecture.md`](docs/architecture.md)
-- [`docs/quickstart.md`](docs/quickstart.md)
-- [`docs/operations.md`](docs/operations.md)
-- [`docs/policy.md`](docs/policy.md)
-- [`docs/security.md`](docs/security.md)
-- [`docs/release.md`](docs/release.md)
+- [`Архитектура`](docs/architecture.ru.md)
+- [`Быстрый старт`](docs/quickstart.ru.md)
+- [`Эксплуатация`](docs/operations.ru.md)
+- [`Политика и контроль доступа`](docs/policy.ru.md)
+- [`Модель безопасности`](docs/security.ru.md)
+- [`Выпуск версий`](docs/release.ru.md)
 
 ## Лицензия
 
@@ -230,4 +236,4 @@ upstream-лицензии:
 
 ---
 
-English version: [`README.md`](README.md).
+[`English version README`](README.md)

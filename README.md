@@ -4,7 +4,9 @@ Family AI assistant with separate memory for every member. Lives in Telegram
 and VK, remembers each person on their own, and doesn't mix up husband, wife,
 or kids.
 
-<!-- TODO: screenshot of admin app -->
+<p align="center">
+  <img src=".github/assets/familia-readme.jpg" alt="Familia assistant preview" width="960">
+</p>
 
 Repo: <https://github.com/Verconto/familia>. Latest release — `v0.5.60`,
 backend `0.2.3`.
@@ -27,16 +29,19 @@ notice. To run your own private instance, see
 > To report a vulnerability, see [`SECURITY.md`](SECURITY.md).
 >
 > **What works reliably** (1+ month in production with the author):
+>
 > - Telegram and VK channels, voice messages
 > - Separate memory per family member, asymmetric visibility, audit log
 > - Backup and restore
 > - Install through the admin app, updates through the admin app
 >
 > **What's in beta:**
+>
 > - WhatsApp (code is there, marked "coming soon" in the admin UI)
 > - macOS / Linux admin app
 >
 > **What's planned** (no timeline promises):
+>
 > - Native mobile client
 > - Web admin
 > - Discord / Slack / Matrix as first-class channels
@@ -169,6 +174,10 @@ its own SSH key on first connect. From there the wizard does everything:
 
 About 5 minutes later the bot is replying in your family chat.
 
+<p align="center">
+  <img src=".github/assets/admin-en.jpg" alt="Familia admin app on Windows" width="960">
+</p>
+
 ### What to prepare ahead of time
 
 - **SSH access to your VPS** — login (usually `root`) and password OR an SSH
@@ -218,12 +227,12 @@ That's over here: [`docs/build-from-source.md`](docs/build-from-source.md).
 
 ## Documentation
 
-- [`docs/architecture.md`](docs/architecture.md)
-- [`docs/quickstart.md`](docs/quickstart.md)
-- [`docs/operations.md`](docs/operations.md)
-- [`docs/policy.md`](docs/policy.md)
-- [`docs/security.md`](docs/security.md)
-- [`docs/release.md`](docs/release.md)
+- [`Architecture`](docs/architecture.md)
+- [`Quickstart`](docs/quickstart.md)
+- [`Operations`](docs/operations.md)
+- [`Policy & access control`](docs/policy.md)
+- [`Security model`](docs/security.md)
+- [`Release flow`](docs/release.md)
 
 ## License
 
@@ -236,4 +245,4 @@ licences:
 
 ---
 
-Russian version: [`README.ru.md`](README.ru.md).
+[`Русская версия README`](README.ru.md)

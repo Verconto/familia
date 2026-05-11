@@ -1,124 +1,95 @@
 # Build from source
 
-Этот документ — для **разработчика или SRE**, который хочет:
+This document is for a **developer or SRE** who wants to:
 
-- (a) собрать `FamiliaAdmin-vX.Y.Z.exe` локально из исходников,
-- (b) поднять стек на ВМ вручную через `docker compose` (без
-  админки), либо
-- (c) понять архитектуру source-pack'а и update-flow для отладки.
+- build `FamiliaAdmin-vX.Y.Z.exe` locally from source;
+- run the stack manually on a VM through `docker compose`, without the admin app;
+- understand the source-pack architecture and update flow for debugging.
 
-Если вы конечный пользователь и хотите просто поднять familia за
-5 минут — см. [`quickstart.md`](quickstart.md).
+If you are an end user and just want to bring familia up in 5 minutes, see [`quickstart.md`](quickstart.md).
 
-## Repo layout
+## Repository layout
 
-```
+```text
 family-assistant/
 ├── nanobot/        — vendored fork of nanobot (agent runtime, channels, MCP)
-├── familia/        — наш слой: principals, policy, identity_resolver, tools
+├── familia/        — our layer: principals, policy, identity_resolver, tools
 ├── memx/           — vendored memX (memory backend, Redis-backed)
 ├── bin/            — release tooling (regen-lock, build-source-pack, release-admin)
-├── docs/           — этот документ и соседи
+├── docs/           — this document and neighbors
 ├── docker-compose.yml          — gateway + redis + ingress
-├── docker-compose.memx.yml     — memX backend (отдельный compose-проект)
-├── Dockerfile                  — мульти-стейдж сборка gateway-образа
+├── docker-compose.memx.yml     — memX backend (separate compose project)
+├── Dockerfile                  — multi-stage build for the gateway image
 ├── admin/src-tauri/resources/bootstrap.sh
-│                               — установка/апдейт на ВМ (запускается админкой)
-└── principals.example.json     — стартовый шаблон для нового деплоя
+│                               — install/update on the VM (run by the admin app)
+└── principals.example.json     — starting template for a new deployment
 ```
 
-> **Заметка про `admin/`.** Sources Tauri/React админки **в этом
-> репо не публикуются** — только готовые артефакты (`.exe` +
-> `WebView2Loader.dll` в [Releases][rel]). Это сознательное
-> решение: code-signing для unsigned-бинарников хобби-проекта
-> отсутствует, и распыляться между поддержкой публичной фронтенд-
-> кодовой базы и backend'а — не в бюджете автора. Если очень
-> нужно — fork backend'а и пишите свой клиент, контракт IPC
-> описан в `nanobot/nanobot/cli/commands.py` (`familia rpc-server`)
-> и `bin/build-source-pack.sh`.
+> **Note about `admin/`.** Tauri/React admin app sources are **not published in this repository**. Only built artifacts are published: `.exe` + `WebView2Loader.dll` in [Releases][rel]. This is intentional. Code signing for unsigned hobby-project binaries is not available, and maintaining both a public frontend codebase and the backend is outside the author's budget. If you need this, fork the backend and write your own client. The IPC contract is described in `nanobot/nanobot/cli/commands.py` (`familia rpc-server`) and `bin/build-source-pack.sh`.
 >
 > [rel]: https://github.com/Verconto/familia/releases/latest
 
-## Что собирается из этого репо
+## What this repository builds
 
-То, что **внутри `gateway`-контейнера**: Python-пакеты `nanobot`,
-`familia`, `memx`. Сборка происходит на целевой ВМ через
-`docker compose build` — либо запускается админкой как часть
-update-flow (см. ниже), либо вручную из `git clone` на ВМ
-([Manual install](#manual-install-on-a-vm-no-admin-exe)).
+It builds what runs **inside the `gateway` container**: Python packages `nanobot`, `familia`, and `memx`. The build happens on the target VM through `docker compose build`. It is either launched by the admin app as part of the update flow, or manually from `git clone` on the VM; see [Manual install on a VM](#manual-install-on-a-vm-no-admin-exe).
 
-`bin/build-source-pack.sh` собирает source-pack tarball
-(`nanobot/`, `familia/src/`, `memx/`, `Dockerfile`, compose-yaml'ы,
-`bootstrap.sh`) — этот pack админка `include_bytes!`-ит в свой
-`.exe` при сборке. Если ты делаешь форк и хочешь свой клиент —
-вот что ему нужно отдать на ВМ.
+`bin/build-source-pack.sh` creates the source-pack tarball (`nanobot/`, `familia/src/`, `memx/`, `Dockerfile`, compose YAML files, `bootstrap.sh`). The admin app embeds this pack into its `.exe` with `include_bytes!` at build time. If you fork the project and write your own client, this is what your client must deliver to the VM.
 
 ### CI guard: `ALLOW_STALE_BACKEND_VERSION`
 
-`bin/release-admin.sh` (запускается на стороне автора при выпуске
-.exe — в публичном репо его эффект только в виде backend-version
-bump'а) отказывается выпускать релиз, если в `nanobot/`,
-`familia/src/`, `memx/`, `Dockerfile`, `bootstrap.sh` что-то
-менялось с прошлого тега, **но** `familia/pyproject.toml::version`
-остался прежним. Это защита от ситуации «выкатили админку с новым
-backend'ом, но забыли поднять backend semver — теперь update-flow
-думает, что обновляться не на что».
+`bin/release-admin.sh` runs on the author's release machine. In the public repository its visible effect is the backend-version bump. It refuses to cut a release if anything changed in `nanobot/`, `familia/src/`, `memx/`, `Dockerfile`, or `bootstrap.sh` since the previous tag, but `familia/pyproject.toml::version` stayed the same. This prevents the failure mode "shipped admin with a new backend, forgot to bump backend semver, update flow thinks there is nothing to update".
 
 Bypass: `ALLOW_STALE_BACKEND_VERSION=1 bin/release-admin.sh ...`.
 
 ## Manual install on a VM (no admin .exe)
 
-Если админкой пользоваться не хочется (CI, headless, audit) —
-ставится руками. На ВМ:
+If you do not want to use the admin app (CI, headless, audit), install manually on the VM:
 
 ```bash
 git clone https://github.com/<owner>/family-assistant.git
 cd family-assistant
 
-# 1. Конфиги:
+# 1. Configs:
 cp principals.example.json ~/.nanobot/principals.json
 cp memx-config/acl.example.json memx-config/acl.json
 cp .env.example .env
 cp familia/policy.example.yaml familia/policy.yaml
 
-# 2. Сгенерировать уникальный 64-hex memx_key для каждого principal'а.
-#    Заменить <replace_with_unique_key> в обоих файлах
-#    (principals.json и acl.json) — они должны совпадать.
+# 2. Generate a unique 64-hex memx_key for each principal.
+#    Replace <replace_with_unique_key> in both files
+#    (principals.json and acl.json); they must match.
 openssl rand -hex 32
 
-# 3. memX поднимаем первым — gateway от него зависит:
+# 3. Bring memX up first; gateway depends on it:
 docker compose -f docker-compose.memx.yml up -d --build
 
-# 4. Затем gateway:
+# 4. Then gateway:
 docker compose up -d --build
 
 # 5. Smoke test:
 docker compose logs -f familia-gateway
 ```
 
-Sanity-проверки:
+Sanity checks:
 
 ```bash
-# memX отвечает изнутри gateway-контейнера:
+# memX answers from inside the gateway container:
 docker exec familia-gateway curl -s \
   -H "X-API-Key: <owner_memx_key>" \
   http://memx-backend:8100/get?key=shared:test
-# Ожидание: 404 (ключа нет), не connection refused.
+# Expected: 404 (key is absent), not connection refused.
 
-# audit-лог пишется:
+# audit log is written:
 tail -f /opt/familia/audit.jsonl
 ```
 
-Послать `/start` боту в Telegram/VK — должно вернуться приветствие
-с вашим principal id.
+Send `/start` to the bot in Telegram/VK. It should return a greeting with your principal id.
 
 ## Backend bump rule
 
-`familia/pyproject.toml::version` — это **backend** semver, отдельный
-от admin .exe release-версии. Update-flow читает его при подключении
-и сравнивает с тем, что вшит в `.exe`.
+`familia/pyproject.toml::version` is the **backend** semver, separate from the admin `.exe` release version. The update flow reads it on connect and compares it with the version embedded in the `.exe`.
 
-**Поднимать на каждое изменение** в:
+**Bump it for every change** in:
 
 - `nanobot/`
 - `familia/src/`
@@ -126,180 +97,124 @@ tail -f /opt/familia/audit.jsonl
 - `Dockerfile`
 - `bootstrap.sh`
 
-**Не поднимать** на admin-only изменения (frontend, локали, Tauri,
-тесты админки, docs).
+**Do not bump it** for admin-only changes: frontend, locales, Tauri, admin tests, docs.
 
-`bin/release-admin.sh` это enforce'ит — если backend изменился, а
-pyproject не двинулся, релиз падает. Bypass — `ALLOW_STALE_BACKEND_VERSION=1`
-(см. выше).
+`bin/release-admin.sh` enforces this. If the backend changed but pyproject did not move, release fails. Bypass: `ALLOW_STALE_BACKEND_VERSION=1`; see above.
 
-## `requirements.lock` regeneration
+## Regenerating `requirements.lock`
 
-Direct-deps в `familia/pyproject.toml` и `nanobot/pyproject.toml`
-зафиксированы по диапазонам (`httpx>=0.27,<1.0`). Транзитивные —
-заморожены через `familia/requirements.lock`, который регенерируется:
+Direct dependencies in `familia/pyproject.toml` and `nanobot/pyproject.toml` are pinned by ranges (`httpx>=0.27,<1.0`). Transitive dependencies are frozen through `familia/requirements.lock`, regenerated with:
 
 ```bash
 bin/regen-lock.sh
 ```
 
-Скрипт прокидывает текущие pyproject-файлы в **тот же
-digest-pinned base image**, что и production Dockerfile, прогоняет
-`uv pip compile --generate-hashes`, и переписывает
-`familia/requirements.lock`. Гарантия — что lock соответствует
-реально устанавливаемым колёсам в build-time.
+The script mounts the current pyproject files into **the same digest-pinned base image** used by the production Dockerfile, runs `uv pip compile --generate-hashes`, and rewrites `familia/requirements.lock`. This guarantees the lock matches the wheels installed at build time.
 
-Регенерируйте после:
+Regenerate after:
 
-- Поднятия любого диапазона прямой зависимости.
-- Периодически (раз в месяц-два) для подтягивания security-фиксов
-  в транзитивных.
+- raising any direct dependency range;
+- periodically, every month or two, to pick up security fixes in transitive dependencies.
 
-Когда lock-файла нет, Dockerfile откатывается на range-resolve из
-pyproject'ов — ставится по-прежнему то же самое в major-границах,
-но drift в транзитивных уже возможен. Production-сборки должны
-ехать с актуальным lock'ом.
+When the lock file is absent, Dockerfile falls back to range resolution from pyprojects. Direct dependencies remain inside major-version bounds, but transitive drift becomes possible. Production builds should ship with a current lock.
 
 ## Source-pack architecture
 
-Раньше admin тянул `ghcr.io/<owner>/familia-assistant:X.Y.Z` на ВМ.
-Сейчас этого пути нет — образ собирается прямо на ВМ из вшитого
-в `.exe` tarball'а. Это даёт:
+Previously the admin app pulled `ghcr.io/<owner>/familia-assistant:X.Y.Z` to the VM. That path is gone: the image is now built directly on the VM from the tarball embedded in the `.exe`. This gives:
 
-- Полный контроль над содержимым релиза (никаких внешних registry).
-- Reproducible builds — всё, что нужно для сборки, лежит рядом
-  с `.exe`.
-- Простота восстановления: tarball + `bootstrap.sh` достаточно для
-  поднятия стека с нуля.
+- full control over release contents, with no external registry;
+- reproducible builds: everything required for the build sits next to the `.exe`;
+- simple recovery: tarball + `bootstrap.sh` are enough to bring the stack up from scratch.
 
 ### Build time (`bin/build-source-pack.sh`)
 
-Упаковывает в детерминированный `tar.gz` (sorted entries, fixed
-mtime):
+Packs a deterministic `tar.gz`: sorted entries, fixed mtime.
+
+Included:
 
 - `nanobot/{nanobot,bridge,pyproject.toml,...}`
 - `familia/{src,pyproject.toml,policy.example.yaml,requirements.lock}`
 - `memx/{src,Dockerfile,...}`
-- `Dockerfile`, `docker-compose.yml`, `docker-compose.memx.yml`,
-  `principals.example.json`, скрипты из `bin/`.
+- `Dockerfile`, `docker-compose.yml`, `docker-compose.memx.yml`, `principals.example.json`, scripts from `bin/`.
 
-Результат — tarball ~3.6 МБ, который кладётся в ресурсы Tauri-
-проекта (вне этого публичного репо). Tauri через `include_bytes!`
-вшивает его в финальный `.exe` на этапе `cargo build`. Если вы
-форкаете и пишете свой клиент — встраивайте pack так же, либо
-скачивайте отдельным файлом при инсталле и указывайте путь.
+The result is a ~3.6 MB tarball placed into Tauri project resources outside this public repository. Tauri embeds it into the final `.exe` through `include_bytes!` during `cargo build`. If you fork and write your own client, either embed the pack the same way or download it as a separate file during install and pass the path.
 
 ### Runtime extraction
 
-При первом запуске `.exe` функция `bootstrap_source_pack()` пишет
-tarball в `%LOCALAPPDATA%\FamiliaAdmin\source\familia-source.tar.gz`
-(один раз — повторный запуск проверяет SHA и пропускает запись).
+On first `.exe` launch, `bootstrap_source_pack()` writes the tarball to `%LOCALAPPDATA%\FamiliaAdmin\source\familia-source.tar.gz`. It writes once; later launches verify SHA and skip writing when unchanged.
 
 ### Install / update flow
 
-При нажатии **Install** или **Update VM** админка:
+When the user clicks **Install** or **Update VM**, the admin app:
 
-1. SFTP'ит `familia-source.tar.gz` → `/opt/familia/source.tar.gz`.
-2. SFTP'ит `bootstrap.sh` (тоже вшит в `.exe`) → `/tmp/bootstrap.sh`.
-3. SSH-исполняет `bash /tmp/bootstrap.sh MODE=install` (или `update`).
-4. Bootstrap распаковывает tarball в `/opt/familia/source/`, затем
-   `docker compose build` собирает образ прямо на ВМ.
+1. uploads `familia-source.tar.gz` over SFTP to `/opt/familia/source.tar.gz`;
+2. uploads embedded `bootstrap.sh` over SFTP to `/tmp/bootstrap.sh`;
+3. runs `bash /tmp/bootstrap.sh MODE=install` or `MODE=update` over SSH;
+4. bootstrap extracts the tarball into `/opt/familia/source/`, then `docker compose build` builds the image directly on the VM.
 
-## Update flow (детально)
+## Update flow in detail
 
-`bootstrap.sh MODE=update` отличается от `MODE=install`:
+`bootstrap.sh MODE=update` differs from `MODE=install`:
 
-- **Skip** этапов `dirs` (каталоги уже есть) и `seed_graph` (граф
-  семьи уже есть).
-- **Keep** `prereqs` / `docker` / `probe_mirrors` — на случай, если
-  с прошлого деплоя что-то на ВМ испортилось или появились новые
-  зеркальные требования.
-- `compose up -d --force-recreate` гарантирует пересоздание
-  контейнеров под новый образ.
+- skips `dirs` (directories already exist) and `seed_graph` (family graph already exists);
+- keeps `prereqs`, `docker`, and `probe_mirrors` in case the VM changed since the previous deploy or new mirror requirements appeared;
+- `compose up -d --force-recreate` guarantees containers are recreated for the new image.
 
 ### Atomic `SOURCE_VERSION`
 
-Файл `/opt/familia/SOURCE_VERSION` (содержит backend-semver)
-**пишется только после** `wait_healthy` — то есть после того, как
-gateway-контейнер прошёл healthcheck. Если update упал на середине,
-файл остаётся со старым значением, и при следующем подключении
-admin честно покажет «на ВМ старая версия, нужно повторить
-обновление».
+`/opt/familia/SOURCE_VERSION` contains backend semver and is written **only after** `wait_healthy`, meaning after the gateway container passes healthcheck. If update fails halfway, the file keeps the old value, and on next connect admin truthfully shows that the VM still runs the old version and update must be repeated.
 
-### Откуда читается версия на ВМ
+### Where the VM version is read from
 
-Backend-версия для сравнения с admin'ом читается **из живого
-контейнера**:
+Backend version for comparison with admin is read **from the live container**:
 
 ```bash
 docker exec familia-gateway python3 -c \
   'import importlib.metadata; print(importlib.metadata.version("familia"))'
 ```
 
-Не с диска. Это критично: если update частично прошёл (новые файлы
-на диске, но контейнер не пересобрался) — версия в контейнере
-останется старой, и admin это увидит.
+Not from disk. This is critical: if update partly succeeded (new files on disk, container not rebuilt), the container version remains old and admin sees it.
 
 ## SIGHUP hot-reload contract
 
-Большинство мутаций конфига (add/remove channel, approve pending
-principal, set STT provider) **не перезапускают контейнер**. Вместо
-этого:
+Most config mutations (add/remove channel, approve pending principal, set STT provider) **do not restart the container**. Instead:
 
-1. `nanobot.cli.commands::_run_gateway` при старте регистрирует
-   `loop.add_signal_handler(signal.SIGHUP, _on_reload)`.
-2. `_on_reload` вызывает:
-   - `familia.principals.reload_registry()` — перечитывает
-     `principals.json` с диска, обновляет in-memory registry.
-   - `ChannelManager.reload_from_disk(new_config)` — диффает
-     `config.json` против текущих channel-инстансов, добавляет
-     новые / убирает удалённые / переинициализирует изменённые.
-3. Всё это сериализовано через `asyncio.Lock` с **one-deep coalescing**:
-   если SIGHUP пришёл во время уже идущего reload'а, он встаёт в
-   очередь как ровно один follow-up (idempotent re-read диска).
-   Лавину сигналов это глушит.
+1. `nanobot.cli.commands::_run_gateway` registers `loop.add_signal_handler(signal.SIGHUP, _on_reload)` at startup.
+2. `_on_reload` calls:
+   - `familia.principals.reload_registry()` to reread `principals.json` from disk and update the in-memory registry;
+   - `ChannelManager.reload_from_disk(new_config)` to diff `config.json` against current channel instances, add new ones, remove deleted ones, and reinitialize changed ones.
+3. The whole path is serialized through `asyncio.Lock` with **one-deep coalescing**. If SIGHUP arrives during an active reload, it becomes exactly one follow-up run: an idempotent reread from disk. This dampens signal storms.
 
-### Со стороны админки
+### Admin app side
 
-`signal_gateway_reload` (Rust) выполняет:
+`signal_gateway_reload` in Rust runs:
 
 ```bash
 docker kill --signal=HUP familia-gateway
 ```
 
-Если signal-путь падает (контейнер мёртв, docker недоступен) —
-fallback на `restart_gateway_quiet`, полный `docker restart
-familia-gateway`. Оба пути логируются через `tracing::info!` /
-`tracing::warn!`, видно в `Diagnostics` в админке.
+If the signal path fails (container dead, Docker unavailable), fallback is `restart_gateway_quiet`: full `docker restart familia-gateway`. Both paths log through `tracing::info!` / `tracing::warn!`, visible in **Diagnostics** in the admin app.
 
-**Бюджет времени**: SIGHUP-reload — ~120 мс, full restart — ~30 с.
+**Time budget**: SIGHUP reload ~120 ms; full restart ~30 s.
 
-## Mirror fallbacks (quick reference)
+## Mirror fallbacks: quick reference
 
-Подробное описание — [`operations.md`](operations.md), раздел
-*Mirror fallbacks*. Краткий список переменных окружения, которые
-читает `bootstrap.sh`:
+Detailed description: [`operations.md`](operations.md), *Mirror fallbacks*. Short list of environment variables read by `bootstrap.sh`:
 
-| Env var | Перебивает |
+| Env var | Overrides |
 |---|---|
-| `APT_MIRROR` | `deb.debian.org` (apt внутри образа) |
-| `PIP_INDEX_URL` | PyPI для `pip` / `uv` внутри образа |
-| `NPM_REGISTRY` | npm для сборки WhatsApp-bridge |
-| `DOCKER_INSTALL_METHOD` | как ставится Docker: `auto` (по умолч.), `apt`, `get.docker.com` |
+| `APT_MIRROR` | `deb.debian.org` (apt inside the image) |
+| `PIP_INDEX_URL` | PyPI for `pip` / `uv` inside the image |
+| `NPM_REGISTRY` | npm for building the WhatsApp bridge |
+| `DOCKER_INSTALL_METHOD` | how Docker is installed: `auto` (default), `apt`, `get.docker.com` |
 
-Если ни одна не задана и upstream недоступен (5-секундный probe) —
-`bootstrap.sh` сам подбирает зеркало из baked-in списка
-(Tsinghua / Yandex / aliyun / mirror.gcr.io / dockerhub.timeweb.cloud)
-и пишет `+ APT_MIRROR (auto): <url>` в лог.
+If none is set and upstream is unreachable (5-second probe), `bootstrap.sh` picks a mirror from the baked-in list (Tsinghua / Yandex / aliyun / mirror.gcr.io / dockerhub.timeweb.cloud) and logs `+ APT_MIRROR (auto): <url>`.
 
 ## Where to dig further
 
-- [`quickstart.md`](quickstart.md) — пользовательский путь установки.
-- [`operations.md`](operations.md) — backup/restore, диагностика,
-  ротация ключей, mirror-фолбеки.
-- [`architecture.md`](architecture.md) — почему gateway/memX/policy
-  устроены именно так.
-- [`policy.md`](policy.md) — модель privilege/ACL и peer-edge.
-- [`security.md`](security.md) — threat model, что считается
-  privileged-операцией.
-- [`release.md`](release.md) — pipeline релиза admin'а и backend'а.
+- [`quickstart.md`](quickstart.md) — user installation path.
+- [`operations.md`](operations.md) — backup/restore, diagnostics, key rotation, mirror fallbacks.
+- [`architecture.md`](architecture.md) — why gateway/memX/policy are arranged this way.
+- [`policy.md`](policy.md) — privilege/ACL model and peer-edge.
+- [`security.md`](security.md) — threat model and what counts as a privileged operation.
+- [`release.md`](release.md) — release pipeline for admin and backend.
