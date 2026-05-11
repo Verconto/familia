@@ -152,7 +152,7 @@ cp -f "$SRC_PACK" "$SRC_PACK_VERSIONED"
 cp -f "$SRC_PACK.sha256" "$SRC_PACK_VERSIONED.sha256"
 
 echo "→ changelog"
-cat >> dist/admin/CHANGELOG.md <<EOF
+cat >> admin/CHANGELOG.md <<EOF
 
 ## v${VER} — $(date -u +%Y-%m-%d)
 
@@ -166,7 +166,8 @@ EOF
 # decide whether to upgrade — so the body has to actually exist on
 # the release. Seed it with a placeholder; the human edits before
 # pushing the release. Skipped if a hand-edited file is already there.
-NOTES="dist/admin/release-notes-v${VER}.md"
+NOTES="admin/release-notes/release-notes-v${VER}.md"
+mkdir -p admin/release-notes
 if [[ ! -f "$NOTES" ]]; then
     cat > "$NOTES" <<EOF
 ## Что нового в v${VER}
