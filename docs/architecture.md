@@ -52,7 +52,7 @@ in the system — see [`security.md`](security.md).
 
 ## Data flow (inbound message)
 
-```
+```text
 1. Telegram / VK delivers a message to the channel adapter.
 2. nanobot calls familia.identity_resolver.resolve(channel, sender_id).
 3. We look up principals.json → principal_id, role.
@@ -87,20 +87,20 @@ unless an explicit peer-edge grants it.
 
 ## Trust boundaries
 
-```
-                    ┌────────────────┐
+```text
+                    ┌─────────────────┐
                     │ Operator laptop │  (admin .exe + WebView2Loader.dll)
                     └────────┬────────┘
                              │ SSH (port 22, key auth)
-   ┌─────────────────────────┴──────────────────────────────────┐
-   │  VM (Linux, root SSH only)                                 │
-   │  ┌──────────────────────────────────────────────────────┐  │
-   │  │ docker network: familia_default                      │  │
+   ┌─────────────────────────┴───────────────────────────────────┐
+   │  VM (Linux, root SSH only)                                  │
+   │  ┌───────────────────────────────────────────────────────┐  │
+   │  │ docker network: familia_default                       │  │
    │  │   familia-gateway   ──▶  memx-backend ──▶ memx-redis │  │
-   │  └──────────────────────────────────────────────────────┘  │
-   │  /opt/familia/{principals.json, policy.yaml, acl.json,     │
-   │                .env, audit.jsonl}                          │
-   └────────────────────────────────────────────────────────────┘
+   │  └───────────────────────────────────────────────────────┘  │
+   │  /opt/familia/{principals.json, policy.yaml, acl.json,      │
+   │                .env, audit.jsonl}                           │
+   └─────────────────────────────────────────────────────────────┘
                 ▲                                ▲
                 │                                │
    ┌────────────┴──────────┐         ┌───────────┴────────────┐

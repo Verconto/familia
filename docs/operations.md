@@ -1,6 +1,6 @@
 # Operations
 
-How to run familia day-to-day: backups, restores, log/disk hygiene,
+How to run `familia` day-to-day: backups, restores, log/disk hygiene,
 key rotation, troubleshooting.
 
 ## Backup
