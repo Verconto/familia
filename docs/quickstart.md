@@ -1,116 +1,116 @@
-# Quickstart
+# Быстрый старт
 
-Familia is a family assistant that runs on your VPS and talks to your family through Telegram/VK. This document is for a **normal user**: a parent who downloaded the admin app and wants to bring the stack up in 5 minutes.
+Familia — семейный ассистент, который живет на вашем VPS и общается с близкими через Telegram/VK. Этот документ для обычного пользователя: родителя, который скачал админку и хочет за 5 минут поднять стек.
 
-> If you are a developer and want to build the `.exe` from source or run the service manually with `docker compose`, see [`build-from-source.md`](build-from-source.md).
+> Если вы разработчик и хотите собрать `.exe` из исходников или поднять сервис вручную через `docker compose`, см. [`build-from-source.md`](build-from-source.md).
 
-## Short version
+## Кратко
 
-Three steps: rent a VPS, download `FamiliaAdmin-vX.Y.Z.exe`, run the install wizard. The admin app installs Docker, builds the image from source (~3.6 MB tarball embedded in the `.exe`), and starts the stack.
+Три шага: арендуете VPS, скачиваете `FamiliaAdmin-vX.Y.Z.exe`, запускаете мастер установки. Дальше админка сама ставит Docker, собирает образ из исходников (архив ~3.6 МБ вшит прямо в `.exe`) и поднимает стек.
 
-Expect about 5 minutes of active work plus 3-5 minutes of build time on the VM.
+Итого: около 5 минут ваших действий плюс 3-5 минут сборки на ВМ.
 
-## What to prepare ahead of time
+## Что подготовить заранее
 
 ### 1. VPS
 
-Any Linux hosting with Ubuntu 22.04+ or Debian 12+ works. Minimum:
+Подойдет любой Linux-хостинг с Ubuntu 22.04+ или Debian 12+. Минимум:
 
-- **2 GB RAM**
-- **10 GB disk**
+- **2 ГБ RAM**
+- **10 ГБ диска**
 
-Known options:
+Проверенные варианты:
 
-- **Hetzner Cloud** (CX22, about €4/month).
-- **Selectel** / **Timeweb** / **Beget** for Russian card payments.
-- **DigitalOcean** / **Vultr** / **Linode** with standard Ubuntu images.
+- **Hetzner Cloud** (тариф CX22, около €4/мес).
+- **Selectel** / **Timeweb** / **Beget** — российские, можно оплатить картой РФ.
+- **DigitalOcean** / **Vultr** / **Linode** — стандартные образы Ubuntu.
 
-Budget: roughly **250-500 RUB/month**, depending on provider and plan.
+Бюджет: **примерно 250-500 руб./мес**, зависит от поставщика и тарифа.
 
-You do **not** need to install Docker or anything else in advance. The install wizard does it.
+Docker и прочее **заранее ставить не нужно**. Мастер установки сделает это сам.
 
-### 2. VPS access
+### 2. Доступ к VPS
 
-Any of these work:
+Подойдет любой вариант:
 
-- `root@<ip>` + password. The wizard creates an SSH key on first connect, installs the public key into `~/.ssh/authorized_keys`, and stops needing the password. The password is not stored.
-- Normal user + sudo, with a password or NOPASSWD.
-- Existing SSH key. If the key has a passphrase, the admin app asks for it.
+- `root@<ip>` + пароль. При первом подключении мастер сам создаст SSH-ключ, установит публичную часть в `~/.ssh/authorized_keys`, и дальше пароль не понадобится. Пароль нигде не сохраняется.
+- Обычный пользователь + sudo, с паролем или NOPASSWD.
+- Готовый SSH-ключ. Если ключ защищен парольной фразой, админка спросит ее.
 
-When you enter `host` in the wizard, the admin app tries to read `~/.ssh/config` automatically (`ssh -G user@host`) and suggest the right key. If it is not in the config, it tries the standard chain: `id_ed25519` -> `id_rsa` -> `id_ecdsa` -> `id_dsa`.
+Когда вы введете `host` в мастере, админка автоматически попробует прочитать `~/.ssh/config` (`ssh -G user@host`) и предложить нужный ключ. Если ключа в конфиге нет, она пройдет по стандартной цепочке: `id_ed25519` -> `id_rsa` -> `id_ecdsa` -> `id_dsa`.
 
-### 3. LLM provider
+### 3. Поставщик LLM
 
-Choose one:
+Один из вариантов:
 
-- **ChatGPT Plus / Pro subscription** — sign in via OAuth directly from the admin app through OpenAI Codex. No API key, no extra spend beyond your subscription. This is OpenAI's officially supported path for agentic use through Codex / CLI.
-- **API key** for OpenAI / Anthropic / Groq — if you already have a paid API account. Enter it in the admin app during setup. For Claude this is the only supported path: Anthropic does not allow Claude Pro subscriptions to back bot scenarios, so the admin app does not expose an OAuth button for them.
+- **Подписка ChatGPT Plus / Pro** — вход через OAuth прямо из админки через OpenAI Codex. API-ключ не нужен, отдельных трат нет: вы уже платите за подписку. Это официально поддерживаемый OpenAI путь для агентского использования через Codex / CLI.
+- **API-ключ** OpenAI / Anthropic / Groq — если у вас уже есть платный API-аккаунт. Ключ вводится в админке при установке. Для Claude это единственный поддерживаемый путь: Anthropic запрещает использовать подписку Claude Pro для ботов, поэтому кнопки OAuth для Claude в админке нет.
 
-### 4. Chat channel (optional)
+### 4. Канал общения (необязательно)
 
-At least one of:
+Хотя бы один из:
 
-- **Telegram bot token** — created in 30 seconds through [@BotFather](https://t.me/BotFather): `/newbot` -> name -> token like `1234567890:AAFxxx...`.
-- **VK group access token** — in community settings, **API usage -> Create key**, permissions: `messages`, `photos`.
+- **Telegram bot token** — создается за 30 секунд через [@BotFather](https://t.me/BotFather): `/newbot` -> имя -> токен вида `1234567890:AAFxxx...`.
+- **VK group access token** — в настройках сообщества: **Работа с API -> Создать ключ**, права: `messages`, `photos`.
 
-You can skip channels during installation and add them later in the admin app in a couple of clicks. **WhatsApp** code already exists, but the UI marks it as "coming soon": we are waiting for WhatsApp to provide an open Bot API. Until then, enabling it honestly is not possible.
+Каналы можно не подключать во время установки и добавить позже в админке за пару кликов. **WhatsApp** в коде уже есть, но в интерфейсе помечен как "скоро": ждем открытый Bot API от WhatsApp. До этого момента честно включить его нельзя.
 
-### 5. Windows laptop
+### 5. Windows-ноутбук
 
-Any Windows 10 / 11 machine with **WebView2** installed. It is present by default on modern Windows systems.
+Любой Windows 10 / 11 с установленным **WebView2**. В современных системах он обычно уже есть.
 
-## Install through the admin app
+## Установка через админку
 
-1. Download **two** files from [Releases](../../releases/latest):
+1. Скачайте из [Releases](../../releases/latest) **два** файла:
    - `FamiliaAdmin-vX.Y.Z.exe`
    - `WebView2Loader.dll`
 
-   Put them **in the same folder**. The `.exe` will not start without the `.dll` next to it.
+   Положите их **в одну папку**. Без `.dll` рядом `.exe` не запустится.
 
-2. Run the `.exe`. Windows SmartScreen shows a red "publisher could not be verified" screen. Click **More info -> Run anyway**. The binary is unsigned: a code-signing certificate costs about $300/year, too much for a hobby project. You can verify the SHA-256 hash published in Releases to make sure the file was not replaced.
+2. Запустите `.exe`. Windows SmartScreen покажет красный экран "не удалось проверить издателя". Нажмите **More info -> Run anyway**. Файл не подписан: сертификат подписи кода стоит около $300/год, для хобби-проекта это слишком дорого. Можно проверить SHA-256 из Releases и убедиться, что файл не подменили.
 
-3. On the first screen, enter your VM **IP/host** and login. The admin app:
-   - checks SSH config and suggests a key automatically;
-   - supports password-only mode if there is no key, then creates one and replaces password auth with it;
-   - asks for the passphrase if the key is encrypted.
+3. На первом экране введите **IP/host** вашей ВМ и логин. Админка:
+   - проверит SSH-конфиг и предложит ключ автоматически;
+   - если ключа нет, поддержит вход только по паролю: создаст ключ сама и заменит им парольный доступ;
+   - если ключ зашифрован, спросит парольную фразу.
 
-4. After connect, the **preflight panel** opens: a list of VM checks with color status.
+4. После подключения откроется **панель предварительных проверок**: список проверок ВМ с цветовой индикацией.
 
-   - **Green** — OK.
-   - **Yellow** — non-critical, you can continue.
-   - **Red** — blocks install, for example less than 3 GB of free disk or missing `curl`. The **Install** button stays disabled until red items are fixed.
+   - **Зеленый** — все в порядке.
+   - **Желтый** — некритично, можно продолжить.
+   - **Красный** — мешает установке, например нет 3 ГБ свободного места или отсутствует `curl`. Кнопка **Установить** не активируется, пока красные пункты не исправлены.
 
-5. Enter your name. It becomes the first **admin principal**: the owner of the stack.
+5. Введите ваше имя. Оно станет первым участником с ролью `admin`: владельцем стека.
 
-6. Click **Install**. In about 5 minutes the wizard:
-   - installs Docker and the compose plugin if missing;
-   - unpacks the source pack on the VM (~3.6 MB tarball embedded in the `.exe`);
-   - builds images on the VM with `docker compose build`;
-   - starts the stack: gateway + memX + redis;
-   - initializes the family graph.
+6. Нажмите **Установить**. Мастер примерно за 5 минут:
+   - поставит Docker и compose-плагин, если их нет;
+   - распакует на ВМ архив исходников (~3.6 МБ, вшит прямо в `.exe`);
+   - соберет образы прямо на ВМ через `docker compose build`;
+   - поднимет стек: gateway + memX + redis;
+   - инициализирует семейный граф.
 
-7. After installation the dashboard opens. Add channels (Telegram / VK), invite the rest of the family, and follow the built-in steps in the **FAQ** tab.
+7. После установки откроется панель управления. Добавляйте каналы Telegram / VK, приглашайте остальных членов семьи. Пошаговые подсказки есть во вкладке **FAQ** прямо в админке.
 
-## If hosting blocks international egress
+## Если хостинг режет международный исходящий трафик
 
-Some VPS providers, especially Russian providers in 2026, filter outbound traffic to `pypi.org`, `get.docker.com`, `registry-1.docker.io`, and similar hosts. Bootstrap detects this automatically: it probes the known hosts with a 5-second timeout and switches to built-in mirrors when they are unreachable (Tsinghua, Yandex, aliyun, mirror.gcr.io, dockerhub.timeweb.cloud). When needed, it also reconfigures Docker daemon for `registry-mirror`.
+На некоторых VPS-провайдерах, особенно российских в 2026 году, фильтруется исходящий трафик к `pypi.org`, `get.docker.com`, `registry-1.docker.io` и похожим узлам. Bootstrap автоматически это определяет: проверяет известные узлы с таймаутом 5 секунд и при недоступности переключается на встроенные зеркала (Tsinghua, Yandex, aliyun, mirror.gcr.io, dockerhub.timeweb.cloud). При необходимости он также перенастраивает Docker daemon на `registry-mirror`.
 
-To force your own mirror manually, set `APT_MIRROR=`, `PIP_INDEX_URL=`, or `NPM_REGISTRY=` before running bootstrap. These override the automatic choice. Details: [`operations.md`](operations.md), *Mirror fallbacks*.
+Если нужно указать свое зеркало вручную, задайте `APT_MIRROR=`, `PIP_INDEX_URL=` или `NPM_REGISTRY=` перед запуском bootstrap. Эти значения перебивают автоматический выбор. Подробнее: [`operations.md`](operations.md), раздел "Зеркала для ВМ с ограниченным исходящим доступом".
 
-## Updates
+## Обновления
 
-Previously you had to download things manually. Not anymore.
+Раньше нужно было что-то скачивать вручную. Сейчас — нет.
 
-When a new version is released, download the new `FamiliaAdmin-vX.Y.Z.exe` and run it. On the next connection to the VM, the admin app compares its embedded backend version with the version deployed on the server and shows one of three states:
+Когда выходит новая версия, скачайте свежий `FamiliaAdmin-vX.Y.Z.exe` и запустите его. При следующем подключении к ВМ админка сравнит свою встроенную версию серверной части с тем, что развернуто на сервере, и покажет один из трех вариантов:
 
-- **admin newer than VM** — "Update VM?" modal. The button builds the new image from the embedded source pack on the VM (~3-5 minutes).
-- **versions match** — dashboard opens immediately.
-- **admin older than VM** — connection is blocked with "admin too old". Download a newer `.exe`.
+- **админка новее ВМ** — окно "Обновить ВМ?". Кнопка соберет новый образ из встроенного архива исходников на ВМ (примерно 3-5 минут).
+- **версии совпадают** — сразу откроется панель управления.
+- **админка старее ВМ** — подключение заблокируется с сообщением "admin too old". Скачайте более свежую `.exe`.
 
-Admin version (`0.5.60`) and backend version (`0.2.3`) are separate. Admin can ship without a backend update and the backend can update without admin UI changes.
+Версия админки (`0.5.60`) и версия серверной части (`0.2.3`) живут раздельно. Админка может выйти без обновления серверной части, и наоборот.
 
-## Something went wrong?
+## Что-то пошло не так?
 
-- Open the **Diagnostics** tab in the admin app. It runs the standard checks: identity binding, memX reachability, audit tail, and displays the result in human language.
-- Typical problems and symptoms are listed in [`operations.md`](operations.md), *Common problems*.
-- If nothing helps, collect logs (`docker compose logs --tail=200 familia-gateway` and `docker compose logs --tail=100 memx-backend`) and open an issue.
+- Откройте вкладку **Diagnostics** в админке. Она запускает стандартные проверки: привязка личности, доступность memX, хвост аудита, и показывает результат понятным текстом.
+- Типовые проблемы и симптомы перечислены в [`operations.md`](operations.md), раздел "Типовые проблемы".
+- Если ничего не помогает, соберите журналы (`docker compose logs --tail=200 familia-gateway` и `docker compose logs --tail=100 memx-backend`) и откройте issue.

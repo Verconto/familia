@@ -1,99 +1,84 @@
-# Architecture
+# Архитектура
 
-Familia is a fork of [nanobot](https://github.com/HKUDS/nanobot) plus a
-vendored copy of [memX](https://github.com/MehulG/memX), wrapped with a
-small `familia` package that wires identity, policy and ACL into the
-nanobot agent loop.
+Familia — форк [nanobot](https://github.com/HKUDS/nanobot) с включенной копией [memX](https://github.com/MehulG/memX) и небольшим пакетом `familia`, который встраивает идентичность, политику и список доступа в цикл агента nanobot.
 
-## Components
+## Составные части
 
-### `familia/` (this repo)
+### `familia/` (этот репозиторий)
 
-The thin layer that turns nanobot from a single-user agent into a
-multi-principal one.
+Тонкий слой, который превращает nanobot из агента одного пользователя в агента для нескольких участников.
 
 ```
 familia/src/familia/
-  identity_resolver.py   binds inbound messages to principal_id
-  principals.py          loads/validates principals.json
-  acl.py                 family.graph + topics.graph reachability
-  policy/                policy.yaml engine (audit + decisions)
+  identity_resolver.py   связывает входящие сообщения с principal_id
+  principals.py          загружает и проверяет principals.json
+  acl.py                 достижимость в family.graph + topics.graph
+  policy/                движок policy.yaml (аудит + решения)
   tools/                 memory_*, send_buttons, family_graph,
-                         dream_memory_* (consolidator only),
-                         and admin-grant tooling
-  bootstrap.py           single insertion point into nanobot.agent.loop
-  audit.py               append-only JSONL log + 50 MB × 5 rotation
-  cli/                   familia CLI (graph_admin, audit_view)
+                         dream_memory_* (только сжимающий обработчик),
+                         инструменты выдачи прав из админки
+  bootstrap.py           единая точка встраивания в nanobot.agent.loop
+  audit.py               JSONL-журнал только на добавление + ротация 50 МБ x 5
+  cli/                   CLI familia (graph_admin, audit_view)
 ```
 
-### `nanobot/` (forked subtree)
+### `nanobot/` (встроенный форк)
 
-The upstream agent loop. We patch a handful of files to hand control to
-the `familia` layer at well-known points (channel ingress, prompt
-build, tool dispatch, memory write). Patches live in `patches/`.
+Верхнеуровневый цикл агента. Мы патчим несколько файлов, чтобы в известных точках передать управление слою `familia`: вход канала, сборка запроса, вызов инструментов, запись памяти. Патчи лежат в `patches/`.
 
-### `memx/` (vendored subtree)
+### `memx/` (встроенная копия)
 
-FastAPI + Redis store with per-actor ACL. Each principal has a unique
-API key (`memx_key`); requests are authenticated by `X-API-Key`. The
-ACL file (`memx-config/acl.json`) maps each key to allowed scopes.
+Хранилище FastAPI + Redis со списком доступа для каждого участника. У каждого участника есть уникальный ключ API (`memx_key`); запросы проходят проверку по `X-API-Key`. Файл доступа (`memx-config/acl.json`) связывает каждый ключ с разрешенными областями.
 
-We use three scope shapes:
+Используются три вида областей:
 
-- `shared:<key>` — visible to every actor (e.g. `shared:family.graph`).
-- `private:<P>:<key>` — only principal `P` can read/write
-  (e.g. `private:owner:value:user_profile`).
-- `pair:<A>:<B>:<key>` — both `A` and `B` (e.g. spouses).
+- `shared:<key>` — видно всем участникам, например `shared:family.graph`.
+- `private:<P>:<key>` — читать и писать может только участник `P`, например `private:owner:value:user_profile`.
+- `pair:<A>:<B>:<key>` — доступ есть у `A` и `B`, например у супругов.
 
-There's also a special **dream consolidator** actor with full
-write access across all scopes; it runs at night to digest history
-into per-scope memory. Its key is the single most sensitive secret
-in the system — see [`security.md`](security.md).
+Есть отдельный **ночной обработчик сжатия памяти** с правом записи во все области. Он ночью сжимает историю в память по областям. Его ключ — самый чувствительный секрет в системе; см. [`security.md`](security.md).
 
-## Data flow (inbound message)
+## Поток данных: входящее сообщение
 
 ```text
-1. Telegram / VK delivers a message to the channel adapter.
-2. nanobot calls familia.identity_resolver.resolve(channel, sender_id).
-3. We look up principals.json → principal_id, role.
-4. set_current_actor(principal_id) is pinned for the rest of the turn.
-5. The agent loop builds a prompt:
-     - shared SOUL/AGENTS/TOOLS files (read-only, same for everyone)
-     - that principal's USER profile from memX
-     - their MEMORY and HEARTBEAT entries
-     - a sanitized stitch of peer profiles they have ACL reach to
-       (4 KiB cap, sentinel-wrapped, see acl.py)
-6. LLM produces a response and tool calls. Each tool call is
-   re-checked: e.g. memory_write to a foreign principal goes through
-   policy.yaml + family.graph reachability.
-7. policy.yaml decisions are appended to audit.jsonl with the
-   actor, target scope, decision and reason.
-8. Reply goes back through the same channel, same chat. No broadcast.
+1. Telegram / VK доставляет сообщение адаптеру канала.
+2. nanobot вызывает familia.identity_resolver.resolve(channel, sender_id).
+3. Мы ищем в principals.json -> principal_id, роль.
+4. set_current_actor(principal_id) закрепляется до конца хода.
+5. Цикл агента собирает запрос:
+     - общие файлы SOUL/AGENTS/TOOLS (только чтение, одинаковые для всех)
+     - профиль USER этого участника из memX
+     - его записи MEMORY и HEARTBEAT
+     - очищенную сшивку профилей других участников, до которых есть доступ
+       по списку доступа (лимит 4 КиБ, обертка sentinel, см. acl.py)
+6. LLM создает ответ и вызовы инструментов. Каждый вызов проверяется
+   повторно: например, memory_write к чужому участнику проходит через
+   policy.yaml и достижимость в family.graph.
+7. Решения policy.yaml добавляются в audit.jsonl: участник, целевая
+   область, решение и причина.
+8. Ответ уходит через тот же канал, в тот же чат. Рассылки нет.
 ```
 
-## Storage layout
+## Схема хранения
 
-Two storage planes that intentionally don't mix:
+Две плоскости хранения намеренно не смешиваются:
 
-| Plane | Purpose | Keyed by |
-|-------|---------|----------|
-| **Hybrid memX** (per principal) | identity-bound facts: USER profile, MEMORY entries, HEARTBEAT | `principal_id` |
-| **Shared files** (workspace) | bot's persona / tool docs / agent docs | none — single shared truth |
+| Плоскость | Назначение | Ключ |
+|-----------|------------|------|
+| **Гибридный memX** (по участнику) | факты, привязанные к личности: профиль USER, записи MEMORY, HEARTBEAT | `principal_id` |
+| **Общие файлы** (рабочий каталог) | личность бота, описания инструментов, документы агента | нет — единая общая правда |
 
-This split is the security invariant: a principal can never write to
-shared files through the chat path (only through the `familia` CLI
-on the VM), and a principal can never read another's `private:*:*`
-unless an explicit peer-edge grants it.
+Это главное правило безопасности: участник не может писать в общие файлы через чат (только через CLI `familia` на ВМ), и участник не может читать чужие `private:*:*`, если это явно не разрешено связью с другим участником.
 
-## Trust boundaries
+## Границы доверия
 
 ```text
-                    ┌─────────────────┐
-                    │ Operator laptop │  (admin .exe + WebView2Loader.dll)
-                    └────────┬────────┘
-                             │ SSH (port 22, key auth)
-   ┌─────────────────────────┴───────────────────────────────────┐
-   │  VM (Linux, root SSH only)                                  │
+                    ┌────────────────────┐
+                    │ Ноутбук владельца  │  (admin .exe + WebView2Loader.dll)
+                    └─────────┬──────────┘
+                              │ SSH (порт 22, ключ)
+   ┌──────────────────────────┴──────────────────────────────────┐
+   │  ВМ (Linux, root SSH only)                                  │
    │  ┌───────────────────────────────────────────────────────┐  │
    │  │ docker network: familia_default                       │  │
    │  │   familia-gateway   ──▶  memx-backend ──▶ memx-redis │  │
@@ -109,23 +94,15 @@ unless an explicit peer-edge grants it.
    └───────────────────────┘         └────────────────────────┘
 ```
 
-- The operator's laptop is **trusted**: it holds the SSH key.
-- The VM is **trusted**: root on the host can read everything anyway.
-- Telegram/VK channels are **outside the trust boundary** — they see
-  inbound and outbound messages plain.
-- The LLM provider is **outside the trust boundary** — it sees the
-  per-turn prompt (including the actor's stitched peer context).
+- Ноутбук владельца **доверенный**: на нем хранится SSH-ключ.
+- ВМ **доверенная**: root на хосте все равно может прочитать все.
+- Каналы Telegram/VK **вне границы доверия**: они видят входящие и исходящие сообщения открытым текстом.
+- Поставщик LLM **вне границы доверия**: он видит запрос на каждом ходе, включая сшитый контекст других участников, доступный текущему участнику.
 
-For the full threat model see [`security.md`](security.md).
+Полная модель угроз описана в [`security.md`](security.md).
 
-## Why three compose stacks (and why they live together)
+## Зачем три compose-стека и почему они лежат вместе
 
-`docker-compose.yml`, `docker-compose.memx.yml` and
-`docker-compose.cli.yml` are separate so you can stop, restart,
-backup or rebuild each plane independently. In practice all three
-run on the same VM and share the same docker network — the admin
-app drives them as one unit.
+`docker-compose.yml`, `docker-compose.memx.yml` и `docker-compose.cli.yml` разделены, чтобы каждую плоскость можно было останавливать, перезапускать, сохранять и пересобирать отдельно. На практике все три запускаются на одной ВМ и используют одну сеть Docker; админка управляет ими как единым целым.
 
-There's also `docker-compose.exec-sandbox.yml` for nanobot's
-bubblewrap sandbox dependencies (kept separate because changing
-sandbox config shouldn't restart the gateway).
+Есть еще `docker-compose.exec-sandbox.yml` для зависимостей песочницы bubblewrap в nanobot. Он вынесен отдельно, потому что изменение настроек песочницы не должно перезапускать gateway.
