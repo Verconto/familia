@@ -44,7 +44,14 @@ services:
       # Optional: route VK media fetches through a socks5/http proxy.
       VK_MEDIA_PROXY: ${VK_MEDIA_PROXY:-}
     volumes:
-      - ~/.nanobot:/home/nanobot/.nanobot
+      # Host directory holding principals.json, audit.jsonl, cron jobs,
+      # bridge fifo etc. Default ``~/.nanobot`` works for single-user
+      # hosts where the operator runs compose under their own account.
+      # On hosts where compose is invoked through sudo, ``~`` resolves
+      # to /root and the bind misses the operator's data — override via
+      # ``NANOBOT_HOME=/home/<user>/.nanobot`` in .env so the mount
+      # source is absolute and identical for sudo and non-sudo runs.
+      - ${NANOBOT_HOME:-~/.nanobot}:/home/nanobot/.nanobot
       # Persistent scratch for ad-hoc tools (pip-audit, pytest) installed
       # via `docker exec -u 0 … pip install --user`. HOME stays
       # /home/nanobot even under -u 0, so --user lands here. Keeps prod
