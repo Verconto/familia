@@ -76,6 +76,13 @@ class ContextBuilder:
         # "private" and contradicts the actual ACL behaviour.
         parts.append(render_template("agent/memory_model.md"))
 
+        # Grocery shopping via VkusVill official MCP. The MCP server
+        # itself is wired in nanobot-config.json (deployment-time); this
+        # snippet teaches the LLM the proper flow: search with
+        # vvonly=0, confirm cart preview with user, hand off payment
+        # via cart_link_create rather than attempting checkout.
+        parts.append(render_template("agent/shopping_vkusvill.md"))
+
         # Per-principal USER + MEMORY blocks. Falls back to legacy
         # workspace/USER.md and workspace/memory/MEMORY.md when actor
         # is None or memX is unreachable.
