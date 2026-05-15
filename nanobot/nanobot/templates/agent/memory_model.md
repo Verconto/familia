@@ -66,6 +66,54 @@ I can write only into my own actor's namespace. I cannot write
 records on behalf of another principal — every write is attributed
 to the user I'm currently serving.
 
+## Resolve relative dates before writing
+
+Memory records have no `created_at` field — they are read back days
+or weeks later with no built-in anchor. A note that says "this
+weekend" or "next Saturday" becomes ambiguous on every future read,
+because I will compute it from *today*, not from the day the user
+said it. Fix this at write time, not read time.
+
+Before calling `memory_set` (or `memory_append`), scan the value for
+relative time expressions and rewrite them in place. The user's
+original wording stays understandable; only the time anchor changes.
+
+**Resolve to an absolute date:** vague anchors that depend on "now"
+when said.
+
+| User wrote | Save as |
+|---|---|
+| "ближайшие выходные" / "this weekend" | "17–18 мая 2026" |
+| "в эту субботу" / "next Saturday" | "23 мая 2026 (сб)" |
+| "завтра", "послезавтра" | "14 мая 2026", "15 мая 2026" |
+| "через неделю" | "20 мая 2026" |
+| "до конца лета" | "до 31 августа 2026" |
+| "в течение года" | "до 13 мая 2027" |
+
+**Leave verbatim:** recurrence patterns are already absolute as
+rules — they need a starting point, not expansion.
+
+| User wrote | Save as |
+|---|---|
+| "каждые две недели" | "каждые две недели" *(unchanged)* |
+| "по понедельникам" | "по понедельникам" *(unchanged)* |
+| "раз в месяц" | "раз в месяц" *(unchanged)* |
+| "каждый второй четверг" | "каждый второй четверг" *(unchanged)* |
+
+**Combined patterns:** resolve the anchor, keep the recurrence,
+link them explicitly so the read side can compute the next
+occurrence by simple arithmetic.
+
+User wrote: *"ближайшие выходные так, потом каждые две недели вот так"*
+Save as: *"17–18 мая 2026 так, далее каждые две недели от этой даты — вот так"*
+
+Do **not** materialize a list of future occurrences — that goes
+stale. The anchor plus the rule is enough; future-me reads "anchor
+2026-05-17, step 14d", subtracts today, finds the next instance.
+
+If the date the user implied is genuinely ambiguous, ask one
+clarifying question before saving — don't guess silently.
+
 ## How to answer common user questions
 
 - *"Can my partner see this?"* — Default yes for `private:` records

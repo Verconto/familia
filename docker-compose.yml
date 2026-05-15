@@ -1,9 +1,9 @@
 # Assistant stack (familia + nanobot). memX вынесен в docker-compose.memx.yml,
 # CLI — в docker-compose.cli.yml. Стеки независимы, связь по URL:
 #   familia-gateway ──http──> ${MEMX_BASE_URL}
-# По умолчанию MEMX_BASE_URL указывает на memX, опубликованный на docker
-# bridge gateway (172.17.0.1:8100) — same-host setup. Для remote-memX
-# переопредели в .env.
+# По умолчанию MEMX_BASE_URL указывает на memX по service-name
+# (memx-backend:8000) — оба контейнера сидят в общей compose-сети
+# familia_default. Для remote-memX переопредели в .env.
 #
 # Image source: ghcr.io/<owner>/familia-assistant:${FAMILIA_TAG:-0.4.0}.
 # To use a locally-built image instead, override with
@@ -33,16 +33,25 @@ services:
       # FAMILIA_TZ is the default.
       FAMILIA_TZ: ${FAMILIA_TZ:-UTC}
       FAMILIA_TZ_STATE_FILE: /home/nanobot/.nanobot/tz
-      # memX endpoint. Default — same-host на docker bridge gateway
-      # (см. docker-compose.memx.yml, который биндит на 172.17.0.1:8100).
-      MEMX_BASE_URL: ${MEMX_BASE_URL:-http://172.17.0.1:8100}
+      # memX endpoint. Default — service-name DNS внутри compose-сети
+      # familia_default. Хост-публикация 172.17.0.1:8100 в
+      # docker-compose.memx.yml остаётся для внешних клиентов (CLI/admin
+      # с хоста), но gateway↔memX ходит напрямую через bridge.
+      MEMX_BASE_URL: ${MEMX_BASE_URL:-http://memx-backend:8000}
       # Principal id of the owner (routing target for system/cron messages).
       # Default matches principals.example.json.
       FAMILIA_OWNER_ACTOR: ${FAMILIA_OWNER_ACTOR:-owner}
       # Optional: route VK media fetches through a socks5/http proxy.
       VK_MEDIA_PROXY: ${VK_MEDIA_PROXY:-}
     volumes:
-      - ~/.nanobot:/home/nanobot/.nanobot
+      # Host directory holding principals.json, audit.jsonl, cron jobs,
+      # bridge fifo etc. Default ``~/.nanobot`` works for single-user
+      # hosts where the operator runs compose under their own account.
+      # On hosts where compose is invoked through sudo, ``~`` resolves
+      # to /root and the bind misses the operator's data — override via
+      # ``NANOBOT_HOME=/home/<user>/.nanobot`` in .env so the mount
+      # source is absolute and identical for sudo and non-sudo runs.
+      - ${NANOBOT_HOME:-~/.nanobot}:/home/nanobot/.nanobot
       # Persistent scratch for ad-hoc tools (pip-audit, pytest) installed
       # via `docker exec -u 0 … pip install --user`. HOME stays
       # /home/nanobot even under -u 0, so --user lands here. Keeps prod

@@ -122,8 +122,21 @@ class HeartbeatService:
 
         Source is one of ``"memx"`` or ``"file"`` (or None on miss). We
         log it once per tick so the operator knows which path served.
+
+        When familia is installed AND an admin principal is resolved
+        AND that principal has a memX key, ``value:heartbeat`` in memX
+        is the *only* source — the legacy file is ignored even if
+        present. This prevents source-divergence spam: previously an
+        empty memX slot would fall through to ``HEARTBEAT.md``, and a
+        stale entry there would re-fire every tick after its cron
+        equivalent had already been created.
+
+        The file fallback survives strictly for the cases the legacy
+        path was designed for: standalone nanobot (no familia import),
+        no admin principal, or an admin without a memX key.
         """
         admin_id = self._admin_principal_id()
+        familia_owns_source = False
         if admin_id is not None:
             try:
                 from familia.principals import get_registry
@@ -133,6 +146,7 @@ class HeartbeatService:
             else:
                 principal = get_registry().get(admin_id)
                 if principal is not None and principal.memx_key:
+                    familia_owns_source = True
                     try:
                         client = PrincipalMemoryClient(admin_id, principal.memx_key)
                         text = client.get("value:heartbeat")
@@ -144,6 +158,8 @@ class HeartbeatService:
                         text = None
                     if text and text.strip():
                         return text, "memx"
+        if familia_owns_source:
+            return None, None
         # Legacy fallback: workspace/HEARTBEAT.md (single-tenant or
         # pre-migration). Keeps standalone nanobot unchanged.
         if self.heartbeat_file.exists():
