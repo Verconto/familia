@@ -1,64 +1,54 @@
-# Operations
+# Эксплуатация
 
-How to run `familia` day-to-day: backups, restores, log/disk hygiene,
-key rotation, troubleshooting.
+Как вести `familia` каждый день: резервные копии, восстановление, уход за журналами и диском, ротация ключей, диагностика.
 
-## Backup
+## Резервная копия
 
-Through the admin app:
+Через админку:
 
-- **Maintenance** → **Backup** → choose destination folder.
-- Produces `familia-backup-<host>-<timestamp>.tar.gz` containing
-  `principals.json`, `policy.yaml`, `memx-config/acl.json`, the
-  full memX volume contents, and `audit.jsonl`.
-- The backup includes secrets — store it as carefully as `.env`.
+- **Maintenance** -> **Backup** -> выберите папку назначения.
+- На выходе получается `familia-backup-<host>-<timestamp>.tar.gz` с `principals.json`, `policy.yaml`, `memx-config/acl.json`, полным содержимым тома memX и `audit.jsonl`.
+- В резервной копии есть секреты. Храните ее так же аккуратно, как `.env`.
 
-Manual:
+Вручную:
 
 ```bash
-# On the VM:
+# На ВМ:
 cd /opt/familia
-docker compose down               # quiesce writers
+docker compose down               # остановить писателей
 tar czf familia-backup-$(date +%F).tar.gz \
     principals.json policy.yaml \
     memx-config/acl.json .env audit.jsonl \
-    workspace/    # docker volume mount path; depends on your driver
+    workspace/    # путь монтирования docker volume; зависит от драйвера
 docker compose up -d
 ```
 
-Backups happen offline (containers down) intentionally. Live snapshots
-of memX/Redis can race with active writes; this project doesn't try
-to support consistent live backups.
+Резервные копии намеренно делаются в остановленном состоянии, когда контейнеры выключены. Живые снимки memX/Redis могут пересечься с активной записью; проект не пытается поддерживать согласованные живые копии.
 
-## Restore (universal)
+## Восстановление для любой ВМ
 
-Restore is built to be **independent of the source VM** — UID/GID,
-volume names and paths on the source don't matter.
+Восстановление сделано **независимым от исходной ВМ**: UID/GID, имена томов и пути на исходнике не важны.
 
-Through the admin app:
+Через админку:
 
-- **Install** → **Restore from backup** → pick the tarball and a
-  fresh target VM.
-- The app uploads, untars into a temp dir, resolves real volume
-  paths via `docker inspect`, and chowns content to the target
-  container's UID. It never assumes the source VM was identical.
+- **Install** -> **Restore from backup** -> выберите архив и новую целевую ВМ.
+- Приложение загружает архив, распаковывает его во временный каталог, находит реальные пути томов через `docker inspect` и меняет владельца содержимого на UID целевого контейнера. Оно не предполагает, что исходная ВМ была такой же.
 
-Manual:
+Вручную:
 
 ```bash
-# On a fresh VM with familia stack pulled but stopped:
+# На свежей ВМ, где стек familia скачан, но остановлен:
 cd /opt/familia
 docker compose down
 tar xzf familia-backup-*.tar.gz -C ./
-# Adjust ownership inside docker volumes:
+# Поправить владельца внутри docker volumes:
 docker run --rm -v memx_data:/data alpine chown -R 1000:1000 /data
 docker compose up -d
 ```
 
-## Logs
+## Журналы
 
-Container logs are capped via docker `json-file` driver
-(20 MB × 5 rotations) — see `docker-compose.yml`. To inspect:
+Журналы контейнеров ограничены через драйвер Docker `json-file` (20 МБ x 5 ротаций); см. `docker-compose.yml`. Просмотр:
 
 ```bash
 docker compose logs -f familia-gateway
@@ -66,141 +56,117 @@ docker compose logs -f memx-backend
 docker compose logs -f memx-redis
 ```
 
-The audit log (`audit.jsonl`) is application-rotated at 50 MB × 5.
+Журнал аудита (`audit.jsonl`) ротируется самим приложением: 50 МБ x 5.
 
-## Disk hygiene
+## Уход за диском
 
-Familia auto-cleans:
+Familia автоматически чистит:
 
-- `media/` (downloaded chat attachments) — TTL 24 h, runs hourly.
-- `workspace/sessions/*.jsonl` (per-session conversation logs) —
-  TTL 90 days, runs daily.
-- `workspace/.git` (nanobot internal git store) — `git gc` monthly.
-- `audit.jsonl` — rotated at 50 MB, keeps 5 generations.
+- `media/` (скачанные вложения из чата) — срок жизни 24 часа, запуск каждый час.
+- `workspace/sessions/*.jsonl` (журналы разговоров по сессиям) — срок жизни 90 дней, запуск каждый день.
+- `workspace/.git` (внутреннее git-хранилище nanobot) — `git gc` раз в месяц.
+- `audit.jsonl` — ротация на 50 МБ, хранится 5 поколений.
 
-Disk usage shows on **Maintenance** in the admin: free / total VM disk
-plus per-category bytes.
+Использование диска видно в разделе **Maintenance** админки: свободно / всего на ВМ и объем по категориям.
 
-## Key rotation
+## Ротация ключей
 
-### memX per-actor key
+### Ключ memX отдельного участника
 
-When a principal's memX key needs rotation (suspected leak, device
-change):
+Когда ключ memX участника нужно сменить (подозрение на утечку, смена устройства):
 
 ```bash
-# 1. Generate new key:
+# 1. Сгенерировать новый ключ:
 openssl rand -hex 32 > /tmp/newkey
 
-# 2. Edit both files atomically:
+# 2. Атомарно изменить оба файла:
 cd /opt/familia
 NEW=$(cat /tmp/newkey)
-# - update principals.json: principals.<id>.memx_key = $NEW
-# - update memx-config/acl.json: replace OLD key with NEW key
-# - keep all scope grants
+# - обновить principals.json: principals.<id>.memx_key = $NEW
+# - обновить memx-config/acl.json: заменить OLD key на NEW key
+# - сохранить все разрешения областей
 
-# 3. Restart memX (re-reads acl.json) and gateway (re-reads principals.json):
+# 3. Перезапустить memX (перечитывает acl.json) и gateway (перечитывает principals.json):
 docker compose -f docker-compose.memx.yml restart memx-backend
 docker compose restart familia-gateway
 
-# 4. Verify the principal can still read their data:
+# 4. Проверить, что участник все еще читает свои данные:
 docker compose logs --tail=50 familia-gateway | grep -i actor
 ```
 
-### Dream consolidator key
+### Ключ ночного обработчика сжатия памяти
 
-Rotation needs the same dance plus an extra step: the dream
-consolidator key is named separately in `acl.json` (not bound to a
-principal). Its leak is the most catastrophic — a holder can
-overwrite any principal's private memory. Treat it as a root-equivalent
-secret.
+Ротация требует тех же действий и еще одного шага: ключ ночного обработчика сжатия памяти отдельно назван в `acl.json` и не привязан к участнику. Его утечка наиболее опасна: обладатель может перезаписать личную память любого участника. Относитесь к нему как к секрету уровня root.
 
-## Bring up / down
+## Запуск и остановка
 
 ```bash
-# Stop everything:
+# Остановить все:
 cd /opt/familia
 docker compose down
 docker compose -f docker-compose.memx.yml down
 
-# Start in correct order (memX first):
+# Запустить в правильном порядке (сначала memX):
 docker compose -f docker-compose.memx.yml up -d
 docker compose up -d
 ```
 
-## Diagnostics
+## Диагностика
 
-The admin app's **Diagnostics** page runs the equivalent of:
+Страница **Diagnostics** в админке запускает эквивалент:
 
 ```bash
-# Identity binding test:
+# Проверка привязки личности:
 docker exec familia-gateway python -c \
   "from familia.identity_resolver import resolve; \
    print(resolve('telegram', 12345))"
 
-# memX reachability:
+# Доступность memX:
 docker exec familia-gateway curl -s \
   -H "X-API-Key: $(grep '^FAMILIA_OWNER_ACTOR' .env | cut -d= -f2)" \
   http://memx-backend:8100/get?key=shared:family.graph
 
-# Audit tail:
+# Хвост аудита:
 tail -n 50 /opt/familia/audit.jsonl
 ```
 
-If audit is silent during a real chat — the principal binding is
-broken. Check `principals.json` `channel_id`/`sender_id` against
-the message metadata in container logs.
+Если аудит молчит во время реального чата, сломана привязка участника. Проверьте `channel_id`/`sender_id` в `principals.json` по метаданным сообщения в журналах контейнера.
 
-## Common problems
+## Типовые проблемы
 
-| Symptom | Likely cause |
-|---------|--------------|
-| `unknown principal: telegram/12345` | Telegram chat not bound to a principal in `principals.json` |
-| Replies are generic, ignore your context | LLM key wrong / quota; `OPENAI_API_KEY` env not loaded into gateway |
-| `acl deny: scope=private:X:value:Y` | Cross-principal read without peer-edge — by design, see [`policy.md`](policy.md) |
-| memX returns 401 | `acl.json` and `principals.json` out of sync (different memX keys) |
-| Telegram bot silent | webhook URL not set, or container can't reach `api.telegram.org` |
-| VK media missing | VK CDN blocks non-RU IPs; set `VK_PROXY` in `.env` to a SOCKS5 you trust |
+| Симптом | Вероятная причина |
+|---------|-------------------|
+| `unknown principal: telegram/12345` | Telegram-чат не привязан к участнику в `principals.json` |
+| Ответы общие, без учета вашего контекста | Неверный ключ LLM или исчерпана квота; `OPENAI_API_KEY` не попал в окружение gateway |
+| `acl deny: scope=private:X:value:Y` | Чтение другого участника без связи доступа — так задумано, см. [`policy.md`](policy.md) |
+| memX возвращает 401 | `acl.json` и `principals.json` разошлись: разные ключи memX |
+| Telegram-бот молчит | webhook URL не задан или контейнер не может достучаться до `api.telegram.org` |
+| Нет медиа из VK | CDN VK блокирует нероссийские IP; укажите `VK_PROXY` в `.env` на доверенный SOCKS5 |
 
-## Mirror fallbacks for restricted-egress hosts
+## Зеркала для ВМ с ограниченным исходящим доступом
 
-Bootstrap auto-probes the standard upstreams on startup
-(`pypi.org`, `deb.debian.org`, `registry.npmjs.org`,
-`get.docker.com`, `registry-1.docker.io`). When any of them isn't
-reachable from the target VM, it picks the first reachable mirror
-from a baked-in fallback list — no operator action required. The
-auto-selected mirror is logged as `+ APT_MIRROR (auto): <url>` so you
-can see what was chosen.
+При запуске bootstrap автоматически проверяет стандартные источники (`pypi.org`, `deb.debian.org`, `registry.npmjs.org`, `get.docker.com`, `registry-1.docker.io`). Если какой-то источник недоступен с целевой ВМ, выбирается первое доступное зеркало из встроенного списка. Действия оператора не нужны. Автоматически выбранное зеркало пишется в журнал как `+ APT_MIRROR (auto): <url>`, чтобы было видно, что выбрано.
 
-The baked-in lists (intentionally short — one well-trusted mirror per
-region):
+Встроенные списки намеренно короткие: одно хорошо известное зеркало на регион.
 
-| Resource | Auto-fallback chain |
-|----------|---------------------|
+| Ресурс | Цепочка автоматического отката |
+|--------|--------------------------------|
 | PyPI | `pypi.tuna.tsinghua.edu.cn`, `mirrors.aliyun.com/pypi` |
 | Debian apt | `mirror.yandex.ru/debian`, `mirrors.tuna.tsinghua.edu.cn/debian` |
 | npm | `registry.npmmirror.com`, `mirrors.huaweicloud.com/repository/npm` |
-| Docker Hub | `mirror.gcr.io`, `dockerhub.timeweb.cloud` (written to `/etc/docker/daemon.json`) |
-| Docker engine install | falls through to `apt install docker.io` when `get.docker.com` is blocked |
+| Docker Hub | `mirror.gcr.io`, `dockerhub.timeweb.cloud` (записывается в `/etc/docker/daemon.json`) |
+| Установка Docker engine | откат на `apt install docker.io`, если `get.docker.com` заблокирован |
 
-To **override** the auto-pick (e.g. you have a corporate-internal
-mirror you'd rather use), set any of these env vars before bootstrap
-runs and they win unconditionally:
+Чтобы **переопределить** автоматический выбор, например при наличии корпоративного внутреннего зеркала, задайте любую из этих переменных окружения до запуска bootstrap. Они побеждают без условий:
 
-| Env var | What it overrides | Example value |
-|---------|-------------------|---------------|
-| `APT_MIRROR` | `deb.debian.org` / `security.debian.org` inside the image | `https://mirror.yandex.ru/debian` |
-| `PIP_INDEX_URL` | PyPI index used by `pip` and `uv` inside the image | `https://pypi.tuna.tsinghua.edu.cn/simple` (or a self-hosted devpi) |
-| `NPM_REGISTRY` | npm registry used when building the WhatsApp bridge | `https://registry.npmmirror.com` |
-| `DOCKER_INSTALL_METHOD` | How bootstrap installs docker on a host that doesn't have it | `auto` (default — try `get.docker.com`, fall back to `apt install docker.io`), `apt`, `get.docker.com` |
+| Переменная окружения | Что переопределяет | Пример значения |
+|----------------------|--------------------|-----------------|
+| `APT_MIRROR` | `deb.debian.org` / `security.debian.org` внутри образа | `https://mirror.yandex.ru/debian` |
+| `PIP_INDEX_URL` | индекс PyPI, который используют `pip` и `uv` внутри образа | `https://pypi.tuna.tsinghua.edu.cn/simple` или свой devpi |
+| `NPM_REGISTRY` | npm registry для сборки WhatsApp bridge | `https://registry.npmmirror.com` |
+| `DOCKER_INSTALL_METHOD` | способ установки Docker на хост без Docker | `auto` (по умолчанию: попробовать `get.docker.com`, затем `apt install docker.io`), `apt`, `get.docker.com` |
 
-For the **base images themselves** (`ghcr.io/astral-sh/uv:...` and
-`python:3.12-slim`), the Dockerfiles pin `FROM` by digest, so the
-only knob is the daemon-level registry mirror. Bootstrap writes a
-minimal `/etc/docker/daemon.json` with `registry-mirrors` automatically
-when Docker Hub probe fails — but only if the file doesn't already
-declare its own mirror. To pre-empt the auto-pick with a corporate
-mirror, drop the daemon.json yourself before running install:
+Для **базовых образов** (`ghcr.io/astral-sh/uv:...` и `python:3.12-slim`) Dockerfile закрепляет `FROM` по digest, поэтому единственная настройка — зеркало registry на уровне Docker daemon. Bootstrap автоматически пишет минимальный `/etc/docker/daemon.json` с `registry-mirrors`, когда проверка Docker Hub не проходит, но только если файл еще не объявляет свое зеркало. Чтобы заранее указать корпоративное зеркало, положите `daemon.json` перед установкой:
 
 ```jsonc
 // /etc/docker/daemon.json
@@ -209,8 +175,7 @@ mirror, drop the daemon.json yourself before running install:
 }
 ```
 
-For headless installs (no admin app), bootstrap reads the same env
-vars from its environment:
+Для установок без админки bootstrap читает те же переменные окружения:
 
 ```bash
 export APT_MIRROR=https://your-corp-mirror/debian
@@ -218,22 +183,12 @@ export PIP_INDEX_URL=https://your-corp-mirror/pypi/simple
 sudo -E bash bootstrap.sh
 ```
 
-## Reproducible Python builds (`requirements.lock`)
+## Воспроизводимые сборки Python (`requirements.lock`)
 
-Direct deps in `familia/pyproject.toml` are version-capped at the next
-major (`httpx>=0.27,<1.0` etc) so a surprise breaking release can't
-land on a Friday `pip install`. Transitive deps are also frozen — but
-via a separate lock file, `familia/requirements.lock`, regenerated on
-demand:
+Прямые зависимости в `familia/pyproject.toml` ограничены следующим мажорным выпуском (`httpx>=0.27,<1.0` и т.п.), чтобы внезапный ломающий релиз не попал в пятничный `pip install`. Транзитивные зависимости тоже заморожены, но отдельным lock-файлом `familia/requirements.lock`, который обновляется по требованию:
 
 ```bash
 bin/regen-lock.sh
 ```
 
-The script runs `uv pip compile` inside the same digest-pinned base
-image the production Dockerfile uses, so the lock matches what will
-actually install at build time. Re-run after bumping any direct dep,
-or periodically to absorb security fixes in transitive deps. When the
-lock file is absent, the Dockerfile falls back to range-resolving from
-the pyprojects (still major-version-capped, but transitive drift is
-possible).
+Скрипт запускает `uv pip compile` внутри того же закрепленного по digest базового образа, который использует production Dockerfile, поэтому lock соответствует тому, что реально установится при сборке. Запускайте его после поднятия любой прямой зависимости или периодически, чтобы подтянуть security-исправления транзитивных зависимостей. Если lock-файла нет, Dockerfile откатывается к разрешению диапазонов из pyproject-файлов: прямые зависимости все еще ограничены мажорной версией, но дрейф транзитивных зависимостей уже возможен.

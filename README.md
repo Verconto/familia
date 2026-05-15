@@ -1,6 +1,6 @@
-[`English version`](README.en.md)
-
 # familia
+
+[`English`](README.en.md) · Русский
 
 Семейный AI-ассистент с раздельной памятью для каждого члена семьи. Живёт в
 Telegram и ВКонтакте, помнит каждого отдельно, и не путает мужа с женой и
@@ -216,16 +216,16 @@ Telegram и ВКонтакте, помнит каждого отдельно, и
 
 ## Я хочу собрать сам, из исходников
 
-Тебе сюда: [`docs/build-from-source.ru.md`](docs/build-from-source.ru.md).
+Тебе сюда: [`Сборка из исходников`](docs/build-from-source.md).
 
 ## Документация
 
-- [`Архитектура`](docs/architecture.ru.md)
-- [`Быстрый старт`](docs/quickstart.ru.md)
-- [`Эксплуатация`](docs/operations.ru.md)
-- [`Политика и контроль доступа`](docs/policy.ru.md)
-- [`Модель безопасности`](docs/security.ru.md)
-- [`Выпуск версий`](docs/release.ru.md)
+- [`Архитектура`](docs/architecture.md)
+- [`Быстрый старт`](docs/quickstart.md)
+- [`Эксплуатация`](docs/operations.md)
+- [`Политика и контроль доступа`](docs/policy.md)
+- [`Модель безопасности`](docs/security.md)
+- [`Выпуск версий`](docs/release.md)
 
 ## Лицензия
 
@@ -235,7 +235,3 @@ upstream-лицензии:
 - `nanobot/LICENSE` (MIT)
 - `memx/LICENSE` (MIT)
 - См. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
-
----
-
-[`English version README`](README.md)

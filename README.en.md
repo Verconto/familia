@@ -1,6 +1,6 @@
-[`Русская версия`](README.md)
-
 # familia
+
+English · [`Русский`](README.md)
 
 Family AI assistant with separate memory for every member. Lives in Telegram
 and VK, remembers each person on their own, and doesn't mix up husband, wife,
@@ -225,16 +225,16 @@ About 5 minutes later the bot is replying in your family chat.
 
 ## I'd rather build from source
 
-That's over here: [`docs/build-from-source.md`](docs/build-from-source.md).
+That's over here: [`Build from source`](docs/en/build-from-source.md).
 
 ## Documentation
 
-- [`Architecture`](docs/architecture.md)
-- [`Quickstart`](docs/quickstart.md)
-- [`Operations`](docs/operations.md)
-- [`Policy & access control`](docs/policy.md)
-- [`Security model`](docs/security.md)
-- [`Release flow`](docs/release.md)
+- [`Architecture`](docs/en/architecture.md)
+- [`Quickstart`](docs/en/quickstart.md)
+- [`Operations`](docs/en/operations.md)
+- [`Policy & access control`](docs/en/policy.md)
+- [`Security model`](docs/en/security.md)
+- [`Release flow`](docs/en/release.md)
 
 ## License
 

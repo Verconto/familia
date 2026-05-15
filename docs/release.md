@@ -1,87 +1,62 @@
-# Release flow
+# Выпуск версий
 
-Two independent SemVer tracks, coupled by a compose-template constant.
+В проекте две независимые линии SemVer, связанные константой в шаблоне compose.
 
-## Tracks
+## Линии
 
-| Track | What changes trigger a bump | Tag prefix | Where it ships |
-|-------|------------------------------|-----------|-----------------|
-| **Image** | `familia/`, `nanobot/`, `memx/`, `Dockerfile` | `image-vX.Y.Z` | `ghcr.io/<owner>/familia-assistant:X.Y.Z`, `ghcr.io/<owner>/memx:X.Y.Z` |
-| **Admin** | UI / IPC / install wizard | `admin-vX.Y.Z` | GitHub Release: `FamiliaAdmin-vX.Y.Z.exe` + `WebView2Loader.dll` (+ both `.sha256`) |
+| Линия | Что требует поднять версию | Префикс тега | Куда публикуется |
+|-------|----------------------------|--------------|------------------|
+| **Образ** | `familia/`, `nanobot/`, `memx/`, `Dockerfile` | `image-vX.Y.Z` | `ghcr.io/<owner>/familia-assistant:X.Y.Z`, `ghcr.io/<owner>/memx:X.Y.Z` |
+| **Админка** | интерфейс, IPC, мастер установки | `admin-vX.Y.Z` | GitHub Release: `FamiliaAdmin-vX.Y.Z.exe` + `WebView2Loader.dll` (+ оба `.sha256`) |
 
-Each admin release embeds a build-time constant `IMAGE_TAG = X.Y.Z`
-which becomes the default in the compose template the admin writes
-to the VM during install. Operators can override per-VM, but the
-default is whatever this admin build was tested against.
+Каждый выпуск админки содержит константу сборки `IMAGE_TAG = X.Y.Z`. Она становится значением по умолчанию в compose-шаблоне, который админка записывает на ВМ при установке. Оператор может переопределить значение для конкретной ВМ, но по умолчанию используется образ, с которым проверялась эта сборка админки.
 
-## Why two tracks
+## Зачем две линии
 
-Most weeks the UI changes and the backend doesn't. Decoupling avoids
-1 GB image rebuilds for a button-padding fix and lets us ship admin
-patches in minutes.
+В большинстве недель меняется интерфейс, а бэкенд — нет. Разделение позволяет не пересобирать образ на 1 ГБ из-за отступа у кнопки и выпускать исправления админки за минуты.
 
-When the backend changes in a way the admin needs to know about
-(new tool, new IPC, new compose stanza), both bump in the same
-push: `image-vX.Y.Z` *and* `admin-vA.B.C` together; the new admin
-embeds the new image tag.
+Если бэкенд меняется так, что админка должна об этом знать (новый инструмент, новый IPC, новый фрагмент compose), обе версии поднимаются в одном push: `image-vX.Y.Z` и `admin-vA.B.C`; новая админка содержит новый тег образа.
 
-## Tag → CI flow
+## Поток tag -> CI
 
 ```
 git commit ...
-git tag image-v0.5.0           # only when backend changed
-git tag admin-v0.5.35          # for the corresponding admin
+git tag image-v0.5.0           # только если менялся бэкенд
+git tag admin-v0.5.35          # соответствующая админка
 git push --tags
 ```
 
-CI (when configured):
+CI, когда он настроен:
 
-- `image-v*` → builds and pushes `familia-assistant:0.5.0` and
-  `memx:0.5.0`. Also tags `:latest`.
-- `admin-v*` → builds the `.exe` (Windows runner) and uploads it
-  to a draft GitHub Release.
+- `image-v*` -> собирает и публикует `familia-assistant:0.5.0` и `memx:0.5.0`, а также ставит тег `:latest`.
+- `admin-v*` -> собирает `.exe` на Windows runner и загружает его в черновик GitHub Release.
 
-Until the GitHub-side automation lands, both can be done manually:
-`docker buildx build --push` for images and
-`bin/release-admin.sh` for the admin.
+Пока автоматизация на стороне GitHub не готова, оба действия можно выполнить вручную: `docker buildx build --push` для образов и `bin/release-admin.sh` для админки.
 
-## Update path on a running VM
+## Обновление работающей ВМ
 
-`Maintenance` → **Pull image** runs:
+`Maintenance` -> **Pull image** выполняет:
 
 ```bash
 cd /opt/familia
-# admin rewrites docker-compose.yml with the new pinned tag
+# админка переписывает docker-compose.yml с новым закрепленным тегом
 docker compose pull
 docker compose up -d
 ```
 
-This is delta-only (~30 MB typically), takes 1–3 minutes. The
-operator can stay on an older image if they like — admin pins
-SemVer, never `latest`, so their stack won't drift unexpectedly.
+Обычно скачивается только разница (~30 МБ), процесс занимает 1-3 минуты. Оператор может остаться на старом образе: админка закрепляет SemVer, а не `latest`, поэтому стек не уедет на новую версию сам.
 
-## Compatibility
+## Совместимость
 
-Each release of admin declares a minimum image version
-(`min_image_version` constant, currently `0.4.0`). The gateway's
-`/health` returns `image_version`. On connect the admin compares;
-if mismatch, the **Compatibility** banner offers an inline
-"upgrade image" button.
+Каждый выпуск админки объявляет минимальную версию образа (константа `min_image_version`, сейчас `0.4.0`). `/health` у gateway возвращает `image_version`. При подключении админка сравнивает версии; если есть расхождение, баннер **Compatibility** предлагает встроенную кнопку обновления образа.
 
-We support the rolling window "admin v1.x ↔ image ≥ 0.5.0".
-Bumping the lower bound only happens on admin major bumps.
+Поддерживаемое окно: "admin v1.x <-> image >= 0.5.0". Нижняя граница поднимается только при мажорном выпуске админки.
 
-## Security of the supply chain
+## Безопасность цепочки поставки
 
-- Images are pulled from `ghcr.io` over HTTPS.
-- Admin `.exe` is unsigned (no code-signing certificate). The plan
-  is to keep it unsigned indefinitely — it's a hobby project and
-  the EV cert overhead isn't justifiable. SmartScreen warns; users
-  click through.
-- Each `.exe` is published with a `.sha256` next to it. We don't
-  use sigstore yet; if you mirror the artifact, mirror the hash too.
-- The release commit is signed with the maintainer's GPG key
-  (will be published in `SECURITY.md` once the public key is
-  registered on github.com).
+- Образы скачиваются из `ghcr.io` по HTTPS.
+- Файл админки `.exe` не подписан: сертификата подписи кода нет. План — оставить его неподписанным, потому что это хобби-проект и расходы на EV-сертификат не оправданы. SmartScreen предупреждает; пользователь подтверждает запуск.
+- Каждый `.exe` публикуется рядом с `.sha256`. Sigstore пока не используется; если зеркалируете артефакт, зеркалируйте и хэш.
+- Коммит выпуска подписывается GPG-ключом сопровождающего. Ключ будет опубликован в `SECURITY.md`, когда публичный ключ зарегистрируется на github.com.
 
-Forks should swap in their own keys / certs as appropriate.
+Форки должны подставить свои ключи и сертификаты, если это нужно.

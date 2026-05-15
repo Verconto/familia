@@ -1,24 +1,17 @@
-# Policy & access control
+# Политика и контроль доступа
 
-Two layers cooperate to decide what one principal can do to another's
-data:
+Два слоя вместе решают, что один участник может делать с данными другого:
 
-1. **Family graph (`shared:family.graph`)** — declares peer-edges
-   like `spouse_of`, `guardian_of`, `parent_of`. Reachability through
-   these edges defines who can ask the bot about whom.
-2. **`policy.yaml`** — an explicit allow/deny matrix on top of the
-   graph. Defaults are deny-all; rules whitelist specific
-   (actor-role → target-role → tool/scope) tuples.
+1. **Семейный граф (`shared:family.graph`)** — задает связи между участниками, например `spouse_of`, `guardian_of`, `parent_of`. Достижимость по этим связям определяет, о ком участник может спрашивать бота.
+2. **`policy.yaml`** — явная матрица разрешений и запретов поверх графа. По умолчанию запрещено все; правила разрешают конкретные сочетания `(роль действующего участника -> роль цели -> инструмент/область)`.
 
-Every privileged decision is appended to `audit.jsonl`.
+Каждое привилегированное решение добавляется в `audit.jsonl`.
 
-## The family graph
+## Семейный граф
 
-Stored as JSON in memX scope `shared:family.graph`, edited only via
-`familia` CLI on the VM (chat actors cannot write it — see
-[`security.md`](security.md), guarantee #2).
+Хранится как JSON в области memX `shared:family.graph`, редактируется только через CLI `familia` на ВМ. Участники чата не могут его менять; см. гарантию 2 в [`security.md`](security.md).
 
-Example (sanitized):
+Пример с очищенными данными:
 
 ```json
 {
@@ -32,27 +25,19 @@ Example (sanitized):
 }
 ```
 
-Edge types currently honored:
+Сейчас учитываются такие типы связей:
 
-- `spouse_of` — bidirectional, full peer access.
-- `guardian_of` — directional, guardian → ward only. Used for parents
-  of an adult dependent who needs help managing their data.
-- `parent_of` — directional, parent → child only **and** explicitly
-  not the reverse, even if both edges exist (asymmetric by design;
-  child principals can't auto-introspect their parents).
+- `spouse_of` — двусторонняя связь, полный взаимный доступ.
+- `guardian_of` — односторонняя связь, опекун -> подопечный. Используется для родителей взрослого зависимого человека, которому нужна помощь с управлением данными.
+- `parent_of` — односторонняя связь, родитель -> ребенок, причем обратный ход явно запрещен, даже если в графе есть обе связи. Это намеренная асимметрия: детские учетные записи не могут автоматически просматривать данные родителей.
 
-`role: child` is hard-wired to refuse reverse `parent_of` traversal
-regardless of graph state. This prevents misconfiguration from
-exposing parents' data to a teen account.
+`role: child` жестко запрещает обратный обход `parent_of` независимо от состояния графа. Это защищает от ошибки настройки, которая могла бы открыть данные родителей подростковой учетной записи.
 
 ## `policy.yaml`
 
-Lives at `familia/policy.yaml` (template at
-`familia/policy.example.yaml`). Read at gateway start; restart to
-apply changes (or use the admin app's **Personality** screen which
-includes a policy editor + restart).
+Файл лежит в `familia/policy.yaml`, шаблон — в `familia/policy.example.yaml`. Gateway читает его при старте; для применения изменений нужен перезапуск. Также можно использовать экран **Personality** в админке: там есть редактор политики и перезапуск.
 
-Skeleton:
+Скелет:
 
 ```yaml
 version: 1
@@ -83,31 +68,25 @@ rules:
     reason: "writes to peer require explicit interactive consent (see send_buttons)"
 ```
 
-Every rule that fires writes one entry to `audit.jsonl` if `log: true`.
-The `id` field is required and shows up in the audit log so you can
-trace which rule allowed or denied an action.
+Каждое сработавшее правило пишет одну запись в `audit.jsonl`, если задано `log: true`. Поле `id` обязательно и попадает в журнал аудита, чтобы было видно, какое правило разрешило или запретило действие.
 
-## Audit log
+## Журнал аудита
 
-`audit.jsonl` is one JSON object per line. Always read with `jq` — never
-trust line order to be temporally consistent (it's appended at the
-moment of decision, but multi-thread writes can interleave). Common
-event types:
+`audit.jsonl` — один JSON-объект на строку. Читать его лучше через `jq`. Не считайте порядок строк гарантированно временным: запись добавляется в момент принятия решения, но многопоточная запись может перемешивать строки. Основные события:
 
-| Event | When |
-|-------|------|
-| `policy_decision` | every `allow` or `deny` from `policy.yaml` |
-| `tag_acl_decision` | a tag-write or tag-read goes through reachability |
-| `graph_edit` | `familia` CLI mutates a graph |
-| `peer_edge_proposal` | a principal proposes a peer-edge (admin must approve) |
-| `peer_edge_approved` | admin approves it via the admin app |
-| `memory_write` | every write to memX (regardless of allow/deny) |
-| `dream_consolidate` | nightly consolidator pass |
+| Событие | Когда возникает |
+|---------|-----------------|
+| `policy_decision` | каждое `allow` или `deny` из `policy.yaml` |
+| `tag_acl_decision` | чтение или запись тега проходит проверку достижимости |
+| `graph_edit` | CLI `familia` меняет граф |
+| `peer_edge_proposal` | участник предлагает связь с другим участником, требуется подтверждение админа |
+| `peer_edge_approved` | админ подтверждает связь в админке |
+| `memory_write` | каждая запись в memX, независимо от разрешения или запрета |
+| `dream_consolidate` | ночной проход сжатия памяти |
 
-The admin app's **Audit** screen tails the file with filters; the
-**familia-audit** CLI on the VM does the same offline.
+Экран **Audit** в админке показывает хвост файла с фильтрами. CLI **familia-audit** на ВМ делает то же самое без админки.
 
-Sample entry:
+Пример записи:
 
 ```json
 {
@@ -121,36 +100,25 @@ Sample entry:
 }
 ```
 
-## Peer-edge approval flow
+## Подтверждение связи между участниками
 
-When a principal in chat asks "tell me about my partner's schedule"
-and there's no `spouse_of` edge yet, the bot:
+Когда участник в чате просит "расскажи о расписании партнера", а связи `spouse_of` еще нет, бот:
 
-1. Refuses the read (deny logged with reason `no_peer_edge`).
-2. Sends a button-message to that principal: "Propose
-   `spouse_of` with `<other>`?"
-3. If they tap **yes**, a `peer_edge_proposal` is logged.
-4. The admin sees it on the **Pending** screen of the admin app.
-5. Admin approves → `peer_edge_approved` logged + edge added to
-   `shared:family.graph`.
-6. Future reads succeed.
+1. Отказывает в чтении, записывает запрет с причиной `no_peer_edge`.
+2. Отправляет этому участнику сообщение с кнопкой: "Предложить `spouse_of` с `<other>`?"
+3. Если участник нажимает **yes**, записывается `peer_edge_proposal`.
+4. Админ видит заявку на экране **Pending** в админке.
+5. Админ подтверждает -> записывается `peer_edge_approved`, а связь добавляется в `shared:family.graph`.
+6. Следующие чтения проходят успешно.
 
-This intentionally keeps the human in the loop — no chat-only path
-can grant peer access.
+Так человек остается в контуре принятия решения: из одного только чата нельзя выдать доступ к данным другого участника.
 
-## Children-as-principals
+## Дети как отдельные участники
 
-When a child becomes a principal (gets a phone, you add them to
-`principals.json`):
+Когда ребенок становится отдельным участником (получает телефон, вы добавляете его в `principals.json`):
 
-1. Set `role: child`.
-2. Migrate the topic representing them with
-   `familia migrate topic-to-principal <name>` (see
-   [`security.md`](security.md), *Migration paths*).
-3. Their parents keep `parent_of` edges pointing **to** them. Reverse
-   traversal stays blocked. The child can ask about themselves; they
-   cannot ask about their parents.
+1. Укажите `role: child`.
+2. Перенесите тему, которая представляла ребенка, командой `familia migrate topic-to-principal <name>`; см. раздел *Пути миграции* в [`security.md`](security.md).
+3. У родителей остаются связи `parent_of`, направленные **к** ребенку. Обратный обход остается заблокированным. Ребенок может спрашивать о себе, но не может спрашивать о родителях.
 
-This asymmetry is deliberate: it lets parents see school topics they
-already managed, while preventing a teen account from introspecting
-its parents' marital topics, work, finances, etc.
+Эта асимметрия намеренная: родители видят школьные темы, которыми уже занимались, но подростковая учетная запись не получает обзор супружеских тем родителей, работы, финансов и т.п.
