@@ -111,7 +111,7 @@ When a new version is released, download the new `FamiliaAdmin-vX.Y.Z.exe` and r
 - **versions match** — dashboard opens immediately.
 - **admin older than VM** — connection is blocked with "admin too old". Download a newer `.exe`.
 
-Admin build version (`v0.5.75` in the current source) and backend version (`0.4.4`) are separate. Admin can ship without a backend update and the backend can update without admin UI changes. Published files are available in the [latest release](https://github.com/Verconto/familia/releases/latest).
+Admin build version (`v0.5.76` in the current source) and backend version (`0.4.5`) are separate. Admin can ship without a backend update and the backend can update without admin UI changes. Published files are available in the [latest release](https://github.com/Verconto/familia/releases/latest).
 
 ## Something went wrong?
 

@@ -10,7 +10,7 @@
 # && docker inspect --format '{{index .RepoDigests 0}}' …``
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58
 
-ARG FAMILIA_VERSION=0.4.4
+ARG FAMILIA_VERSION=0.4.5
 LABEL org.opencontainers.image.version="${FAMILIA_VERSION}"
 
 # Build-time mirror fallbacks. Defaults point at canonical upstreams;

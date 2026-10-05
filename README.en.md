@@ -11,7 +11,7 @@ or kids.
 </p>
 
 Repo: <https://github.com/Verconto/familia>. Current source versions:
-admin build `v0.5.75`, backend `0.4.4`. [Latest published
+admin build `v0.5.76`, backend `0.4.5`. [Latest published
 release](https://github.com/Verconto/familia/releases/latest).
 
 ## Try it live

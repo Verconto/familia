@@ -5,7 +5,7 @@
 # (memx-backend:8000) — оба контейнера сидят в общей compose-сети
 # familia_default. Для remote-memX переопредели в .env.
 #
-# Image source: ghcr.io/<owner>/familia-assistant:${FAMILIA_TAG:-0.4.4}.
+# Image source: ghcr.io/<owner>/familia-assistant:${FAMILIA_TAG:-0.4.5}.
 # To use a locally-built image instead, override with
 # `docker compose -f docker-compose.yml -f docker-compose.local.yml up -d`
 # (the .local file restores the `build:` directive against the source tree).
@@ -13,7 +13,7 @@
 services:
   familia-gateway:
     container_name: familia-gateway
-    image: ghcr.io/<owner>/familia-assistant:${FAMILIA_TAG:-0.4.4}
+    image: ghcr.io/<owner>/familia-assistant:${FAMILIA_TAG:-0.4.5}
     command: ["gateway"]
     restart: unless-stopped
     env_file:

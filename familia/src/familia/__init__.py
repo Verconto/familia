@@ -13,4 +13,4 @@ Public surface:
 Everything else is an implementation detail.
 """
 
-__version__ = "0.4.4"
+__version__ = "0.4.5"

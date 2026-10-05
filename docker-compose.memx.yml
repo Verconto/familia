@@ -16,14 +16,14 @@
 # wildcard). Для multi-actor пропиши отдельные ключи per-principal и
 # прокинь их в principals.json → memx_key.
 
-# Image source: ghcr.io/<owner>/memx:${MEMX_TAG:-0.4.4}.
+# Image source: ghcr.io/<owner>/memx:${MEMX_TAG:-0.4.5}.
 # To use a locally-built image instead, override with
 # `docker compose -f docker-compose.memx.yml -f docker-compose.memx.local.yml up -d`.
 
 services:
   memx-backend:
     container_name: memx-backend
-    image: ghcr.io/<owner>/memx:${MEMX_TAG:-0.4.4}
+    image: ghcr.io/<owner>/memx:${MEMX_TAG:-0.4.5}
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
     restart: unless-stopped
     environment:

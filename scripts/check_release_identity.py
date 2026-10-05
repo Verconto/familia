@@ -61,7 +61,7 @@ def _requirement_name(requirement: str) -> str | None:
 def check(backend_version: str, release_tag: str) -> list[str]:
     errors: list[str] = []
     expected_tag = f"image-v{backend_version}"
-    _error(errors, backend_version == "0.4.4", "backend version must be exactly 0.4.4")
+    _error(errors, re.fullmatch(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)", backend_version) is not None, "backend version must be major.minor.patch")
     _error(errors, release_tag == expected_tag, f"release tag must be {expected_tag}")
 
     familia = _toml("familia/pyproject.toml")
@@ -129,6 +129,7 @@ def check(backend_version: str, release_tag: str) -> list[str]:
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     memx_compose = (ROOT / "docker-compose.memx.yml").read_text(encoding="utf-8")
     source_pack = (ROOT / "bin/build-source-pack.sh").read_text(encoding="utf-8")
+    _error(errors, f"ARG FAMILIA_VERSION={backend_version}" in dockerfile.splitlines(), "Dockerfile Familia version diverges")
     _error(errors, "nanobot/bridge" not in dockerfile, "Dockerfile still references removed nanobot bridge")
     _error(errors, "nanobot/entrypoint-familia.sh" not in dockerfile, "Dockerfile still references removed Familia entrypoint")
     _error(errors, f"${{FAMILIA_TAG:-{backend_version}}}" in compose, "Compose Familia image tag diverges")
